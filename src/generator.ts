@@ -2,8 +2,9 @@ import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
-import { buildGenerationPrompt, ensureDir, variantCountForPhase } from './explorer.js';
-import type { GenerationRequest, GenerationResult } from './types.js';
+import { ensureDir, variantCountForPhase } from './explorer.js';
+import { buildVariantPromptPlans } from './prompt-planner.js';
+import type { GenerationRequest, GenerationResult, VariantPromptPlan } from './types.js';
 
 export interface VariantGenerator {
   generate(request: GenerationRequest): Promise<GenerationResult>;
@@ -12,43 +13,56 @@ export interface VariantGenerator {
 export class ClaudeCliGenerator implements VariantGenerator {
   constructor(
     private readonly command = process.env.CLAUDE_CODE_COMMAND ?? 'claude',
-    private readonly timeoutMs = Number(process.env.CLAUDE_CODE_TIMEOUT_MS ?? 120_000),
+    private readonly timeoutMs = readPositiveInteger(process.env.CLAUDE_CODE_TIMEOUT_MS, 120_000),
+    private readonly parallelism = readPositiveInteger(process.env.CLAUDE_CODE_PARALLELISM, 3),
   ) {}
 
   async generate(request: GenerationRequest): Promise<GenerationResult> {
     ensureDir(request.outputDir);
-    const prompt = `${buildGenerationPrompt(request.description, request.round, request.phase, request.previousScores)}
-
-Save all generated files directly in this directory:
-${request.outputDir}`;
-    const promptPath = join(request.outputDir, 'prompt.md');
-    writeFileSync(promptPath, prompt);
+    const plans = buildVariantPromptPlans(request);
     writeGenerationLog(request.outputDir, [
-      `Claude Code generation started.`,
+      `Claude Code parallel generation started.`,
       `command=${this.command}`,
-      `args=-p <prompt:${promptPath}>`,
       `cwd=${request.outputDir}`,
       `outputDir=${request.outputDir}`,
       `round=${request.round}`,
       `phase=${request.phase}`,
+      `variantCount=${plans.length}`,
+      `parallelism=${this.parallelism}`,
       `timeoutMs=${this.timeoutMs}`,
     ].join('\n'));
-    console.info(`[Design Explorer] Claude Code generation started. outputDir=${request.outputDir} prompt=${promptPath}`);
+    console.info(`[Design Explorer] Claude Code parallel generation started. outputDir=${request.outputDir} variants=${plans.length} parallelism=${this.parallelism}`);
+
+    const results = await runWithConcurrency(plans, this.parallelism, (plan) => this.generateSingleVariant(request, plan));
+    return { output: results.join('\n') };
+  }
+
+  private async generateSingleVariant(request: GenerationRequest, plan: VariantPromptPlan): Promise<string> {
+    const promptPath = join(request.outputDir, `${plan.variantId}.prompt.md`);
+    writeFileSync(promptPath, plan.prompt);
+    writeGenerationLog(request.outputDir, [
+      `Claude Code variant generation started.`,
+      `variantId=${plan.variantId}`,
+      `title=${plan.title}`,
+      `outputFile=${plan.outputFile}`,
+      `prompt=${promptPath}`,
+    ].join('\n'));
+    console.info(`[Design Explorer] Starting ${plan.variantId}. outputFile=${plan.outputFile} prompt=${promptPath}`);
 
     return new Promise((resolve, reject) => {
       let child: ChildProcessByStdio<null, Readable, Readable>;
       try {
-        child = spawn(this.command, ['-p', prompt], {
+        child = spawn(this.command, ['-p', plan.prompt], {
           cwd: request.outputDir,
           stdio: ['ignore', 'pipe', 'pipe'],
         });
       } catch (error) {
-        reject(new Error(`Failed to start Claude Code: ${formatError(error)}`));
+        reject(new Error(`Failed to start Claude Code for ${plan.variantId}: ${formatError(error)}`));
         return;
       }
 
-      writeGenerationLog(request.outputDir, `Claude Code process spawned. pid=${child.pid ?? 'unknown'}`);
-      console.info(`[Design Explorer] Claude Code process spawned. pid=${child.pid ?? 'unknown'}`);
+      writeGenerationLog(request.outputDir, `Claude Code process spawned. variantId=${plan.variantId} pid=${child.pid ?? 'unknown'}`);
+      console.info(`[Design Explorer] Claude Code process spawned. variantId=${plan.variantId} pid=${child.pid ?? 'unknown'}`);
 
       let stdout = '';
       let stderr = '';
@@ -61,21 +75,21 @@ ${request.outputDir}`;
 
         settled = true;
         child.kill('SIGTERM');
-        writeGenerationLog(request.outputDir, `Claude Code timed out after ${this.timeoutMs}ms. Sent SIGTERM.`, 'error');
-        console.error(`[Design Explorer] Claude Code timed out after ${this.timeoutMs}ms. outputDir=${request.outputDir}`);
-        reject(new Error('Claude Code timed out.'));
+        writeGenerationLog(request.outputDir, `Claude Code timed out after ${this.timeoutMs}ms. variantId=${plan.variantId}. Sent SIGTERM.`, 'error');
+        console.error(`[Design Explorer] Claude Code timed out after ${this.timeoutMs}ms. variantId=${plan.variantId} outputDir=${request.outputDir}`);
+        reject(new Error(`Claude Code timed out for ${plan.variantId}.`));
       }, this.timeoutMs);
 
       child.stdout.on('data', (data: Buffer) => {
         const text = data.toString();
         stdout += text;
-        writeStreamChunk(request.outputDir, 'stdout', text);
+        writeStreamChunk(request.outputDir, plan.variantId, 'stdout', text);
       });
 
       child.stderr.on('data', (data: Buffer) => {
         const text = data.toString();
         stderr += text;
-        writeStreamChunk(request.outputDir, 'stderr', text);
+        writeStreamChunk(request.outputDir, plan.variantId, 'stderr', text);
       });
 
       child.on('error', (error) => {
@@ -85,9 +99,9 @@ ${request.outputDir}`;
 
         settled = true;
         clearTimeout(timeout);
-        writeGenerationLog(request.outputDir, `Claude Code process error: ${error.message}`, 'error');
-        console.error(`[Design Explorer] Claude Code process error: ${error.message}`);
-        reject(new Error(`Failed to start Claude Code: ${error.message}`));
+        writeGenerationLog(request.outputDir, `Claude Code process error. variantId=${plan.variantId} error=${error.message}`, 'error');
+        console.error(`[Design Explorer] Claude Code process error. variantId=${plan.variantId} error=${error.message}`);
+        reject(new Error(`Failed to start Claude Code for ${plan.variantId}: ${error.message}`));
       });
 
       child.on('close', (code, signal) => {
@@ -99,19 +113,20 @@ ${request.outputDir}`;
         clearTimeout(timeout);
         writeGenerationLog(request.outputDir, [
           `Claude Code process closed.`,
+          `variantId=${plan.variantId}`,
           `code=${code ?? 'null'}`,
           `signal=${signal ?? 'null'}`,
           `stdoutBytes=${Buffer.byteLength(stdout)}`,
           `stderrBytes=${Buffer.byteLength(stderr)}`,
         ].join('\n'), code === 0 ? 'info' : 'error');
-        console.info(`[Design Explorer] Claude Code process closed. code=${code ?? 'null'} signal=${signal ?? 'null'} outputDir=${request.outputDir}`);
+        console.info(`[Design Explorer] Claude Code process closed. variantId=${plan.variantId} code=${code ?? 'null'} signal=${signal ?? 'null'} outputDir=${request.outputDir}`);
 
         if (code !== 0) {
-          reject(new Error(`Claude Code exited with code ${code}: ${stderr}`));
+          reject(new Error(`Claude Code exited with code ${code} for ${plan.variantId}: ${stderr}`));
           return;
         }
 
-        resolve({ output: stdout });
+        resolve(stdout);
       });
     });
   }
@@ -280,17 +295,43 @@ function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function readPositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export function writeGenerationLog(outputDir: string, message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
   ensureDir(outputDir);
   const timestamp = new Date().toISOString();
   appendFileSync(join(outputDir, 'generation.log'), `[${timestamp}] [${level}] ${message}\n`);
 }
 
-function writeStreamChunk(outputDir: string, stream: 'stdout' | 'stderr', text: string): void {
-  writeGenerationLog(outputDir, `${stream}:\n${text.trimEnd()}`);
+function writeStreamChunk(outputDir: string, variantId: string, stream: 'stdout' | 'stderr', text: string): void {
+  writeGenerationLog(outputDir, `${stream} (${variantId}):\n${text.trimEnd()}`);
   for (const line of text.split(/\r?\n/)) {
     if (line.length > 0) {
-      console.info(`[Claude Code ${stream}] ${line}`);
+      console.info(`[Claude Code ${variantId} ${stream}] ${line}`);
     }
   }
+}
+
+async function runWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  const limit = Math.max(1, Math.min(concurrency, items.length));
+  let nextIndex = 0;
+
+  async function runWorker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await worker(items[currentIndex]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: limit }, () => runWorker()));
+  return results;
 }

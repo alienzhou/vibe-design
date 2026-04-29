@@ -2,6 +2,7 @@ import express, { type Request, type Response } from 'express';
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { buildClarificationPrompt, createDefaultClarificationPayload } from './clarification.js';
 import {
   assertRating,
   assertVariantId,
@@ -52,6 +53,18 @@ export function createApp(options: CreateAppOptions = {}) {
       currentState = await generateRound(currentState, []);
       writeState(workspaceDir, currentState);
       res.json(currentState);
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/clarify', (req, res) => {
+    try {
+      const description = readDescription(req);
+      res.json({
+        prompt: buildClarificationPrompt(description),
+        payload: createDefaultClarificationPayload(description),
+      });
     } catch (error) {
       sendError(res, error);
     }
@@ -254,5 +267,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log(`Generator mode: ${process.env.DESIGN_EXPLORER_GENERATOR ?? 'claude-with-mock-fallback'}`);
     console.log(`Claude command: ${process.env.CLAUDE_CODE_COMMAND ?? 'claude'}`);
     console.log(`Claude timeout: ${process.env.CLAUDE_CODE_TIMEOUT_MS ?? '120000'}ms`);
+    console.log(`Claude parallelism: ${process.env.CLAUDE_CODE_PARALLELISM ?? '3'}`);
   });
 }

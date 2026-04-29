@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { CLARIFICATION_TAG, parseClarificationPayload } from './clarification.js';
 import {
   buildGenerationPrompt,
   listVariants,
@@ -10,6 +11,7 @@ import {
   upsertScore,
 } from './explorer.js';
 import { FallbackVariantGenerator, MockVariantGenerator, type VariantGenerator } from './generator.js';
+import { buildVariantPromptPlans } from './prompt-planner.js';
 import type { GenerationRequest, GenerationResult, Score } from './types.js';
 
 describe('explorer workflow', () => {
@@ -45,6 +47,50 @@ describe('explorer workflow', () => {
     expect(explorePrompt).toContain('deliberately contrasting option');
     expect(convergePrompt).toContain('Generate exactly 2 complete standalone HTML files');
     expect(convergePrompt).toContain('variant-1 (5)');
+  });
+
+  it('builds isolated prompt plans for parallel variant generation', () => {
+    const plans = buildVariantPromptPlans({
+      description: '横调结果报告页面',
+      round: 1,
+      phase: 'explore',
+      outputDir: '/tmp/round-1',
+      previousScores: [],
+    });
+
+    expect(plans).toHaveLength(6);
+    expect(plans[0].outputFile).toBe('variant-1.html');
+    expect(new Set(plans.map((plan) => plan.axes.architecture)).size).toBeGreaterThan(1);
+    expect(plans[0].prompt).toContain('exactly one variant');
+    expect(plans[0].prompt).toContain('ASCII/page-map sections');
+  });
+
+  it('parses tagged clarification questions into frontend-safe JSON', () => {
+    const payload = parseClarificationPayload(`
+      <${CLARIFICATION_TAG}>
+      {
+        "version": 1,
+        "summary": "生成报告页面",
+        "questions": [
+          {
+            "id": "target_reader",
+            "label": "Who reads it?",
+            "why": "Reader changes hierarchy.",
+            "type": "single_select",
+            "required": true,
+            "options": ["manager", "engineer"]
+          }
+        ],
+        "assumptions": ["Use sketch-first candidates."]
+      }
+      </${CLARIFICATION_TAG}>
+    `);
+
+    expect(payload.questions[0]).toMatchObject({
+      id: 'target_reader',
+      type: 'single_select',
+      options: ['manager', 'engineer'],
+    });
   });
 
   it('mock generator writes the expected variant count for each phase', async () => {
