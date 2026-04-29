@@ -19,7 +19,9 @@ import type { ExplorerState, Score } from './types.js';
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(moduleDir, '..');
-const defaultWorkspaceDir = join(projectRoot, 'workspace');
+const defaultWorkspaceDir = process.env.DESIGN_EXPLORER_WORKSPACE
+  ? resolve(process.env.DESIGN_EXPLORER_WORKSPACE)
+  : join(projectRoot, 'workspace');
 const publicDir = join(projectRoot, 'public');
 
 interface CreateAppOptions {
@@ -188,6 +190,7 @@ export function createApp(options: CreateAppOptions = {}) {
   async function generateRound(state: ExplorerState, previousScores: Score[]): Promise<ExplorerState> {
     const outputDir = roundDir(workspaceDir, state.round);
     ensureDir(outputDir);
+    console.info(`[Design Explorer] Generating round=${state.round} phase=${state.phase} outputDir=${outputDir}`);
 
     await generator.generate({
       description: state.userDescription,
@@ -202,6 +205,7 @@ export function createApp(options: CreateAppOptions = {}) {
       throw new Error('No variants were generated.');
     }
 
+    console.info(`[Design Explorer] Generated ${variants.length} variant(s). round=${state.round} outputDir=${outputDir}`);
     return { ...state, variants };
   }
 
@@ -247,5 +251,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   createApp().listen(port, () => {
     console.log(`Design Explorer running at http://localhost:${port}`);
     console.log(`Workspace: ${defaultWorkspaceDir}`);
+    console.log(`Generator mode: ${process.env.DESIGN_EXPLORER_GENERATOR ?? 'claude-with-mock-fallback'}`);
+    console.log(`Claude command: ${process.env.CLAUDE_CODE_COMMAND ?? 'claude'}`);
+    console.log(`Claude timeout: ${process.env.CLAUDE_CODE_TIMEOUT_MS ?? '120000'}ms`);
   });
 }

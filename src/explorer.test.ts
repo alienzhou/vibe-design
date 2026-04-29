@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -97,6 +97,7 @@ describe('explorer workflow', () => {
 
       expect(listVariants(workspace, 1)).toHaveLength(6);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('using mock generator'));
+      expect(readFileSync(join(workspace, 'round-1', 'generation.log'), 'utf-8')).toContain('Primary generation failed');
     } finally {
       warn.mockRestore();
       rmSync(workspace, { recursive: true, force: true });

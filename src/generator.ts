@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { buildGenerationPrompt, ensureDir, variantCountForPhase } from './explorer.js';
@@ -21,6 +21,19 @@ export class ClaudeCliGenerator implements VariantGenerator {
 
 Save all generated files directly in this directory:
 ${request.outputDir}`;
+    const promptPath = join(request.outputDir, 'prompt.md');
+    writeFileSync(promptPath, prompt);
+    writeGenerationLog(request.outputDir, [
+      `Claude Code generation started.`,
+      `command=${this.command}`,
+      `args=-p <prompt:${promptPath}>`,
+      `cwd=${request.outputDir}`,
+      `outputDir=${request.outputDir}`,
+      `round=${request.round}`,
+      `phase=${request.phase}`,
+      `timeoutMs=${this.timeoutMs}`,
+    ].join('\n'));
+    console.info(`[Design Explorer] Claude Code generation started. outputDir=${request.outputDir} prompt=${promptPath}`);
 
     return new Promise((resolve, reject) => {
       let child: ChildProcessByStdio<null, Readable, Readable>;
@@ -34,6 +47,9 @@ ${request.outputDir}`;
         return;
       }
 
+      writeGenerationLog(request.outputDir, `Claude Code process spawned. pid=${child.pid ?? 'unknown'}`);
+      console.info(`[Design Explorer] Claude Code process spawned. pid=${child.pid ?? 'unknown'}`);
+
       let stdout = '';
       let stderr = '';
       let settled = false;
@@ -45,15 +61,21 @@ ${request.outputDir}`;
 
         settled = true;
         child.kill('SIGTERM');
+        writeGenerationLog(request.outputDir, `Claude Code timed out after ${this.timeoutMs}ms. Sent SIGTERM.`, 'error');
+        console.error(`[Design Explorer] Claude Code timed out after ${this.timeoutMs}ms. outputDir=${request.outputDir}`);
         reject(new Error('Claude Code timed out.'));
       }, this.timeoutMs);
 
       child.stdout.on('data', (data: Buffer) => {
-        stdout += data.toString();
+        const text = data.toString();
+        stdout += text;
+        writeStreamChunk(request.outputDir, 'stdout', text);
       });
 
       child.stderr.on('data', (data: Buffer) => {
-        stderr += data.toString();
+        const text = data.toString();
+        stderr += text;
+        writeStreamChunk(request.outputDir, 'stderr', text);
       });
 
       child.on('error', (error) => {
@@ -63,16 +85,26 @@ ${request.outputDir}`;
 
         settled = true;
         clearTimeout(timeout);
+        writeGenerationLog(request.outputDir, `Claude Code process error: ${error.message}`, 'error');
+        console.error(`[Design Explorer] Claude Code process error: ${error.message}`);
         reject(new Error(`Failed to start Claude Code: ${error.message}`));
       });
 
-      child.on('close', (code) => {
+      child.on('close', (code, signal) => {
         if (settled) {
           return;
         }
 
         settled = true;
         clearTimeout(timeout);
+        writeGenerationLog(request.outputDir, [
+          `Claude Code process closed.`,
+          `code=${code ?? 'null'}`,
+          `signal=${signal ?? 'null'}`,
+          `stdoutBytes=${Buffer.byteLength(stdout)}`,
+          `stderrBytes=${Buffer.byteLength(stderr)}`,
+        ].join('\n'), code === 0 ? 'info' : 'error');
+        console.info(`[Design Explorer] Claude Code process closed. code=${code ?? 'null'} signal=${signal ?? 'null'} outputDir=${request.outputDir}`);
 
         if (code !== 0) {
           reject(new Error(`Claude Code exited with code ${code}: ${stderr}`));
@@ -120,7 +152,9 @@ export class FallbackVariantGenerator implements VariantGenerator {
     try {
       return await this.primary.generate(request);
     } catch (error) {
-      console.warn(`Claude Code generation failed, using mock generator: ${formatError(error)}`);
+      const message = `Primary generation failed, using mock generator: ${formatError(error)}`;
+      writeGenerationLog(request.outputDir, message, 'warn');
+      console.warn(`[Design Explorer] ${message}`);
       return this.fallback.generate(request);
     }
   }
@@ -244,4 +278,19 @@ function escapeHtml(value: string): string {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function writeGenerationLog(outputDir: string, message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
+  ensureDir(outputDir);
+  const timestamp = new Date().toISOString();
+  appendFileSync(join(outputDir, 'generation.log'), `[${timestamp}] [${level}] ${message}\n`);
+}
+
+function writeStreamChunk(outputDir: string, stream: 'stdout' | 'stderr', text: string): void {
+  writeGenerationLog(outputDir, `${stream}:\n${text.trimEnd()}`);
+  for (const line of text.split(/\r?\n/)) {
+    if (line.length > 0) {
+      console.info(`[Claude Code ${stream}] ${line}`);
+    }
+  }
 }
