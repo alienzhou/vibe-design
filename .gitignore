@@ -5,6 +5,9 @@ node_modules/
 dist/
 build/
 
+# 设计探索生成产物
+workspace/
+
 # Environment files
 .env
 .env.local

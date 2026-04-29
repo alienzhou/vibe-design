@@ -1,396 +1,275 @@
-// State
-let currentState = {
-  round: 0,
-  phase: 'explore',
-  variants: [],
-  scores: {},
-  description: ''
-};
-
-let currentModalVariant = null;
-
-// DOM Elements
-const startScreen = document.getElementById('start-screen');
-const galleryScreen = document.getElementById('gallery-screen');
-const loadingOverlay = document.getElementById('loading-overlay');
-const modalOverlay = document.getElementById('modal-overlay');
-
-const descriptionInput = document.getElementById('description-input');
-const startBtn = document.getElementById('start-btn');
-const nextRoundBtn = document.getElementById('next-round-btn');
-const finalizeBtn = document.getElementById('finalize-btn');
-
-const phaseBadge = document.getElementById('phase-badge');
-const roundBadge = document.getElementById('round-badge');
-const variantsGrid = document.getElementById('variants-grid');
-
-const previewFrame = document.getElementById('preview-frame');
-const starRating = document.getElementById('star-rating');
-const ratingLabel = document.getElementById('rating-label');
-const closeModal = document.getElementById('close-modal');
-
-// Rating labels
-const ratingLabels = {
-  0: '未评分',
-  1: '不喜欢',
-  2: '不太喜欢',
-  3: '一般',
-  4: '喜欢',
-  5: '非常喜欢'
-};
-
-// Event Listeners
-startBtn.addEventListener('click', startExploration);
-nextRoundBtn.addEventListener('click', nextRound);
-closeModal.addEventListener('click', closeVariantModal);
-
-// Star rating
-starRating.querySelectorAll('.star').forEach((star, index) => {
-  star.addEventListener('click', () => {
-    if (!currentModalVariant) return;
+"use strict";
+(() => {
+  // src/client.ts
+  var currentState = {
+    round: 0,
+    phase: "explore",
+    variants: [],
+    scores: {},
+    description: ""
+  };
+  var currentModalVariant = null;
+  var startScreen = query("start-screen");
+  var galleryScreen = query("gallery-screen");
+  var loadingOverlay = query("loading-overlay");
+  var modalOverlay = query("modal-overlay");
+  var descriptionInput = query("description-input");
+  var startBtn = query("start-btn");
+  var nextRoundBtn = query("next-round-btn");
+  var finalizeBtn = query("finalize-btn");
+  var phaseBadge = query("phase-badge");
+  var roundBadge = query("round-badge");
+  var currentRound = query("current-round");
+  var variantsGrid = query("variants-grid");
+  var previewFrame = query("preview-frame");
+  var starRating = query("star-rating");
+  var ratingLabel = query("rating-label");
+  var closeModal = query("close-modal");
+  var ratingLabels = {
+    0: "\u672A\u8BC4\u5206",
+    1: "\u4E0D\u559C\u6B22",
+    2: "\u4E0D\u592A\u559C\u6B22",
+    3: "\u4E00\u822C",
+    4: "\u559C\u6B22",
+    5: "\u975E\u5E38\u559C\u6B22"
+  };
+  startBtn.addEventListener("click", () => {
+    startExploration().catch(showError);
+  });
+  nextRoundBtn.addEventListener("click", () => {
+    nextRound().catch(showError);
+  });
+  finalizeBtn.addEventListener("click", () => {
+    finalizeDesign().catch(showError);
+  });
+  closeModal.addEventListener("click", closeVariantModal);
+  starRating.querySelectorAll(".star").forEach((star, index) => {
     const rating = index + 1;
+    star.addEventListener("click", () => {
+      saveScore(rating).catch(showError);
+    });
+    star.addEventListener("mouseenter", () => {
+      updateStarDisplay(rating, true);
+    });
+  });
+  starRating.addEventListener("mouseleave", () => {
+    if (!currentModalVariant) {
+      return;
+    }
+    updateStarDisplay(currentState.scores[currentModalVariant.id] ?? 0);
+  });
+  modalOverlay.addEventListener("click", (event) => {
+    if (event.target === modalOverlay) {
+      closeVariantModal();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !modalOverlay.classList.contains("hidden")) {
+      closeVariantModal();
+    }
+  });
+  loadExistingState().catch(showError);
+  async function startExploration() {
+    const description = descriptionInput.value.trim();
+    if (!description) {
+      alert("Description is required.");
+      return;
+    }
+    showLoading();
+    try {
+      const state = await requestJson("/api/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description })
+      });
+      applyServerState(state);
+      showGallery();
+      render();
+    } finally {
+      hideLoading();
+    }
+  }
+  async function loadExistingState() {
+    const state = await requestJson("/api/state");
+    if (state.round === 0) {
+      render();
+      return;
+    }
+    applyServerState(state);
+    showGallery();
+    render();
+  }
+  async function saveScore(rating) {
+    if (!currentModalVariant) {
+      return;
+    }
     currentState.scores[currentModalVariant.id] = rating;
     updateStarDisplay(rating);
     updateVariantCardRating(currentModalVariant.id, rating);
-    updateNextButton();
-  });
-
-  star.addEventListener('mouseenter', () => {
-    updateStarDisplay(index + 1, true);
-  });
-});
-
-starRating.addEventListener('mouseleave', () => {
-  if (currentModalVariant) {
-    const rating = currentState.scores[currentModalVariant.id] || 0;
-    updateStarDisplay(rating);
-  }
-});
-
-// Functions
-async function startExploration() {
-  const description = descriptionInput.value.trim();
-  if (!description) {
-    alert('请输入设计描述');
-    return;
-  }
-
-  currentState.description = description;
-  showLoading();
-
-  try {
-    const response = await fetch('/api/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ description })
+    updateActionButtons();
+    await requestJson("/api/score", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ variantId: currentModalVariant.id, rating })
     });
-
-    const data = await response.json();
-    currentState.round = data.round;
-
-    // 模拟生成变体（实际应该等待生成完成）
-    await generateMockVariants();
-
-    hideLoading();
-    showGallery();
-    await loadVariants();
-  } catch (error) {
-    console.error('Start failed:', error);
-    hideLoading();
-    alert('启动失败: ' + error.message);
   }
-}
-
-async function generateMockVariants() {
-  // 模拟生成延迟
-  await new Promise(resolve => setTimeout(resolve, 1500));
-
-  // 创建模拟变体
-  const roundDir = `workspace/round-1`;
-  const mockVariants = [
-    { id: 'variant-1', name: '极简白色', style: 'minimal-white' },
-    { id: 'variant-2', name: '深色科技', style: 'dark-tech' },
-    { id: 'variant-3', name: '渐变活力', style: 'gradient-vibrant' },
-    { id: 'variant-4', name: '柔和自然', style: 'soft-nature' },
-    { id: 'variant-5', name: '商务专业', style: 'business-pro' },
-    { id: 'variant-6', name: '创意大胆', style: 'creative-bold' }
-  ];
-
-  // 这里应该实际调用后端生成
-  // 为了演示，先创建简单的模拟 HTML
-  for (const variant of mockVariants) {
-    const html = generateMockHTML(variant);
-    await saveVariantFile(1, `${variant.id}.html`, html);
+  async function nextRound() {
+    showLoading();
+    try {
+      const state = await requestJson("/api/next-round", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      applyServerState(state);
+      closeVariantModal();
+      render();
+    } finally {
+      hideLoading();
+    }
   }
-}
-
-function generateMockHTML(variant) {
-  const styles = {
-    'minimal-white': { bg: '#fff', text: '#000', accent: '#333' },
-    'dark-tech': { bg: '#0f0f0f', text: '#fff', accent: '#00ff88' },
-    'gradient-vibrant': { bg: 'linear-gradient(135deg, #667eea, #764ba2)', text: '#fff', accent: '#fff' },
-    'soft-nature': { bg: '#f5f5f0', text: '#2d3436', accent: '#6c5ce7' },
-    'business-pro': { bg: '#f8f9fa', text: '#212529', accent: '#0066cc' },
-    'creative-bold': { bg: '#1a1a2e', text: '#eee', accent: '#e94560' }
-  };
-
-  const s = styles[variant.style] || styles['minimal-white'];
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, sans-serif;
-      background: ${s.bg};
-      color: ${s.text};
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 40px;
+  async function finalizeDesign() {
+    const variantId = pickHighestRatedVariant();
+    if (!variantId) {
+      alert("Please score at least one variant before finalizing.");
+      return;
     }
-    .container {
-      max-width: 800px;
-      text-align: center;
-    }
-    h1 {
-      font-size: 48px;
-      font-weight: 700;
-      margin-bottom: 24px;
-      letter-spacing: -1px;
-    }
-    p {
-      font-size: 18px;
-      opacity: 0.8;
-      margin-bottom: 40px;
-      line-height: 1.6;
-    }
-    .cta {
-      display: inline-block;
-      padding: 16px 32px;
-      background: ${s.accent};
-      color: #fff;
-      text-decoration: none;
-      border-radius: 8px;
-      font-weight: 600;
-      font-size: 16px;
-    }
-    .features {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 24px;
-      margin-top: 60px;
-    }
-    .feature {
-      padding: 24px;
-      background: rgba(0,0,0,0.05);
-      border-radius: 12px;
-    }
-    .feature h3 {
-      font-size: 18px;
-      margin-bottom: 8px;
-    }
-    .feature p {
-      font-size: 14px;
-      margin: 0;
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>${currentState.description || 'SaaS Pricing'}</h1>
-    <p>简洁、高效的设计方案，为您的业务带来全新体验</p>
-    <a href="#" class="cta">开始使用</a>
-    <div class="features">
-      <div class="feature">
-        <h3>快速</h3>
-        <p>毫秒级响应</p>
-      </div>
-      <div class="feature">
-        <h3>安全</h3>
-        <p>企业级保护</p>
-      </div>
-      <div class="feature">
-        <h3>智能</h3>
-        <p>AI 驱动</p>
-      </div>
-    </div>
-  </div>
-</body>
-</html>`;
-}
-
-async function saveVariantFile(round, filename, content) {
-  // 实际应该通过后端 API 保存
-  // 这里简化处理
-}
-
-async function loadVariants() {
-  try {
-    const response = await fetch('/api/variants');
-    const data = await response.json();
-
-    currentState.variants = data.variants;
-    currentState.round = data.round;
-    currentState.phase = data.phase;
-
+    const state = await requestJson("/api/finalize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ variantId })
+    });
+    applyServerState(state);
+    render();
+    alert(`Final design exported: ${state.finalOutputPath ?? "/workspace/output/final.html"}`);
+  }
+  function render() {
     updatePhaseDisplay();
     renderVariants();
-  } catch (error) {
-    console.error('Load variants failed:', error);
-    // 使用模拟数据
-    currentState.variants = [
-      { id: 'variant-1', name: '极简白色', path: '#' },
-      { id: 'variant-2', name: '深色科技', path: '#' },
-      { id: 'variant-3', name: '渐变活力', path: '#' },
-      { id: 'variant-4', name: '柔和自然', path: '#' },
-      { id: 'variant-5', name: '商务专业', path: '#' },
-      { id: 'variant-6', name: '创意大胆', path: '#' }
-    ];
-    renderVariants();
+    updateActionButtons();
   }
-}
-
-function renderVariants() {
-  variantsGrid.innerHTML = '';
-
-  currentState.variants.forEach((variant, index) => {
-    const card = document.createElement('div');
-    card.className = 'variant-card';
-    card.dataset.id = variant.id;
-
-    const rating = currentState.scores[variant.id] || 0;
-
-    card.innerHTML = `
+  function renderVariants() {
+    variantsGrid.innerHTML = "";
+    currentState.variants.forEach((variant, index) => {
+      const card = document.createElement("div");
+      card.className = "variant-card";
+      card.dataset.id = variant.id;
+      const rating = currentState.scores[variant.id] ?? 0;
+      const iframe = `${variant.path}?v=${variant.round}`;
+      card.innerHTML = `
       <div class="variant-preview">
-        <iframe srcdoc="${generateMockHTML({ style: getStyleByIndex(index) }).replace(/"/g, '&quot;')}"></iframe>
+        <iframe title="\u8BBE\u8BA1\u53D8\u4F53 ${index + 1}" src="${iframe}"></iframe>
       </div>
       <div class="variant-info">
-        <div class="variant-title">变体 ${index + 1}</div>
+        <div class="variant-title">\u53D8\u4F53 ${index + 1}</div>
         <div class="variant-rating" data-rating="${rating}">
           ${renderStars(rating)}
         </div>
       </div>
     `;
-
-    card.addEventListener('click', () => openVariantModal(variant));
-    variantsGrid.appendChild(card);
-  });
-}
-
-function getStyleByIndex(index) {
-  const styles = ['minimal-white', 'dark-tech', 'gradient-vibrant', 'soft-nature', 'business-pro', 'creative-bold'];
-  return styles[index % styles.length];
-}
-
-function renderStars(rating) {
-  return Array(5).fill(0).map((_, i) =>
-    `<span class="star ${i < rating ? 'active' : ''}">★</span>`
-  ).join('');
-}
-
-function openVariantModal(variant) {
-  currentModalVariant = variant;
-  const rating = currentState.scores[variant.id] || 0;
-
-  updateStarDisplay(rating);
-  previewFrame.srcdoc = generateMockHTML({ style: getStyleByIndex(parseInt(variant.id.split('-')[1]) - 1) });
-
-  modalOverlay.classList.remove('hidden');
-}
-
-function closeVariantModal() {
-  modalOverlay.classList.add('hidden');
-  currentModalVariant = null;
-}
-
-function updateStarDisplay(rating, isHover = false) {
-  const stars = starRating.querySelectorAll('.star');
-  stars.forEach((star, index) => {
-    star.classList.toggle('active', index < rating);
-  });
-
-  ratingLabel.textContent = ratingLabels[rating] || '';
-  ratingLabel.style.color = isHover ? '#fbbf24' : '#fff';
-}
-
-function updateVariantCardRating(variantId, rating) {
-  const card = document.querySelector(`[data-id="${variantId}"]`);
-  if (card) {
-    const ratingContainer = card.querySelector('.variant-rating');
-    ratingContainer.innerHTML = renderStars(rating);
-  }
-}
-
-function updateNextButton() {
-  const scoredCount = Object.keys(currentState.scores).length;
-  nextRoundBtn.disabled = scoredCount === 0;
-  nextRoundBtn.textContent = scoredCount > 0
-    ? `下一轮探索 (${scoredCount}/${currentState.variants.length} 已评分) →`
-    : '请先为设计打分';
-}
-
-async function nextRound() {
-  showLoading();
-
-  try {
-    const response = await fetch('/api/next-round', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({})
+      card.addEventListener("click", () => openVariantModal(variant));
+      variantsGrid.appendChild(card);
     });
-
-    const data = await response.json();
-    currentState.round = data.round;
-    currentState.phase = data.phase;
-    currentState.scores = {};
-
-    await generateMockVariants();
-
+  }
+  function renderStars(rating) {
+    return Array.from(
+      { length: 5 },
+      (_, index) => `<span class="star ${index < rating ? "active" : ""}">\u2605</span>`
+    ).join("");
+  }
+  function openVariantModal(variant) {
+    currentModalVariant = variant;
+    updateStarDisplay(currentState.scores[variant.id] ?? 0);
+    previewFrame.removeAttribute("srcdoc");
+    previewFrame.src = `${variant.path}?v=${variant.round}`;
+    modalOverlay.classList.remove("hidden");
+  }
+  function closeVariantModal() {
+    modalOverlay.classList.add("hidden");
+    currentModalVariant = null;
+    previewFrame.removeAttribute("src");
+  }
+  function updateStarDisplay(rating, isHover = false) {
+    starRating.querySelectorAll(".star").forEach((star, index) => {
+      star.classList.toggle("active", index < rating);
+    });
+    ratingLabel.textContent = ratingLabels[rating];
+    ratingLabel.style.color = isHover ? "#fbbf24" : "#fff";
+  }
+  function updateVariantCardRating(variantId, rating) {
+    const card = document.querySelector(`[data-id="${variantId}"]`);
+    const ratingContainer = card?.querySelector(".variant-rating");
+    if (ratingContainer) {
+      ratingContainer.innerHTML = renderStars(rating);
+    }
+  }
+  function updateActionButtons() {
+    const scoredCount = Object.keys(currentState.scores).length;
+    nextRoundBtn.disabled = scoredCount === 0 || currentState.phase === "finalized";
+    nextRoundBtn.textContent = scoredCount > 0 ? `\u4E0B\u4E00\u8F6E\u63A2\u7D22 (${scoredCount}/${currentState.variants.length} \u5DF2\u8BC4\u5206) \u2192` : "\u8BF7\u5148\u4E3A\u8BBE\u8BA1\u6253\u5206";
+    finalizeBtn.classList.toggle("hidden", currentState.phase !== "converge" || scoredCount === 0);
+  }
+  function updatePhaseDisplay() {
+    const phaseText = {
+      explore: "\u63A2\u7D22",
+      converge: "\u5BF9\u6218",
+      finalized: "\u5DF2\u5B9A\u7A3F"
+    };
+    phaseBadge.textContent = `Phase: ${phaseText[currentState.phase]}`;
+    roundBadge.textContent = `Round ${currentState.round}`;
+    currentRound.textContent = String(currentState.round);
+  }
+  function applyServerState(state) {
+    currentState.round = state.round;
+    currentState.phase = state.phase;
+    currentState.variants = state.variants;
+    currentState.description = state.userDescription;
+    currentState.finalOutputPath = state.finalOutputPath;
+    currentState.scores = Object.fromEntries(state.scores.map((score) => [score.variantId, score.rating]));
+  }
+  function pickHighestRatedVariant() {
+    const entries = Object.entries(currentState.scores);
+    if (entries.length === 0) {
+      return null;
+    }
+    return entries.sort((a, b) => b[1] - a[1])[0][0];
+  }
+  function showGallery() {
+    startScreen.classList.add("hidden");
+    galleryScreen.classList.remove("hidden");
+  }
+  function showLoading() {
+    loadingOverlay.classList.remove("hidden");
+  }
+  function hideLoading() {
+    loadingOverlay.classList.add("hidden");
+  }
+  async function requestJson(url, init) {
+    const response = await fetch(url, init);
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(readErrorMessage(payload) ?? `Request failed with ${response.status}.`);
+    }
+    return payload;
+  }
+  function readErrorMessage(payload) {
+    if (typeof payload === "object" && payload !== null && "error" in payload) {
+      const error = payload.error;
+      return typeof error === "string" ? error : null;
+    }
+    return null;
+  }
+  function query(id) {
+    const element = document.getElementById(id);
+    if (!element) {
+      throw new Error(`Missing element: ${id}`);
+    }
+    return element;
+  }
+  function showError(error) {
+    const message = error instanceof Error ? error.message : "Unknown error.";
+    console.error("Design Explorer error:", error);
     hideLoading();
-    await loadVariants();
-    updateNextButton();
-  } catch (error) {
-    console.error('Next round failed:', error);
-    hideLoading();
+    alert(message);
   }
-}
-
-function updatePhaseDisplay() {
-  phaseBadge.textContent = `Phase: ${currentState.phase === 'explore' ? '探索' : '对战'}`;
-  roundBadge.textContent = `Round ${currentState.round}`;
-}
-
-function showGallery() {
-  startScreen.classList.add('hidden');
-  galleryScreen.classList.remove('hidden');
-}
-
-function showLoading() {
-  loadingOverlay.classList.remove('hidden');
-}
-
-function hideLoading() {
-  loadingOverlay.classList.add('hidden');
-}
-
-// Close modal on outside click
-modalOverlay.addEventListener('click', (e) => {
-  if (e.target === modalOverlay) {
-    closeVariantModal();
-  }
-});
-
-// Keyboard shortcuts
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !modalOverlay.classList.contains('hidden')) {
-    closeVariantModal();
-  }
-});
-
-// Initialize
-updateNextButton();
+})();
