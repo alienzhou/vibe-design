@@ -77,6 +77,30 @@ export interface GenerationResult {
   output: string;
 }
 
+export type GenerationProgressType =
+  | 'round-started'
+  | 'round-completed'
+  | 'variant-started'
+  | 'variant-output'
+  | 'variant-completed'
+  | 'variant-failed'
+  | 'variant-fallback';
+
+export type GenerationProgressLevel = 'info' | 'warn' | 'error';
+
+export interface GenerationProgressEvent {
+  type: GenerationProgressType;
+  level: GenerationProgressLevel;
+  message: string;
+  timestamp: number;
+  round?: number;
+  phase?: Phase;
+  variantId?: string;
+  stream?: 'stdout' | 'stderr';
+}
+
+export type GenerationProgressHandler = (event: GenerationProgressEvent) => void;
+
 export interface CandidateAxes {
   architecture: string;
   logic: string;

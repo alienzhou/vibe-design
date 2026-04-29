@@ -20,7 +20,7 @@ import {
   writeState,
 } from './explorer.js';
 import { createGenerator, DEFAULT_CLAUDE_CODE_ALLOWED_TOOLS, type VariantGenerator } from './generator.js';
-import type { ExplorerState, Score } from './types.js';
+import type { ExplorerState, GenerationProgressEvent, Score } from './types.js';
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(moduleDir, '..');
@@ -39,6 +39,7 @@ export function createApp(options: CreateAppOptions = {}) {
   const generator = options.generator ?? createGenerator();
   let currentExplorationId = readCurrentExplorationId(workspaceDir);
   let currentState = currentExplorationId ? readState(explorationDir(workspaceDir, currentExplorationId)) : null;
+  const progressClients = new Set<Response>();
   if (!currentState) {
     currentExplorationId = null;
   }
@@ -56,6 +57,26 @@ export function createApp(options: CreateAppOptions = {}) {
 
   app.get('/api/explorations', (_req, res) => {
     res.json({ explorations: listExplorations(workspaceDir), currentExplorationId });
+  });
+
+  app.get('/api/progress', (req, res) => {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    sendProgressEvent(res, {
+      type: 'round-started',
+      level: 'info',
+      message: 'Waiting for generation to start.',
+      timestamp: Date.now(),
+    });
+    progressClients.add(res);
+
+    req.on('close', () => {
+      progressClients.delete(res);
+    });
   });
 
   app.post('/api/explorations/:id/select', (req, res) => {
@@ -237,6 +258,14 @@ export function createApp(options: CreateAppOptions = {}) {
     const outputDir = roundDir(activeDir(), state.round);
     ensureDir(outputDir);
     console.info(`[Design Explorer] Generating round=${state.round} phase=${state.phase} outputDir=${outputDir}`);
+    broadcastProgress({
+      type: 'round-started',
+      level: 'info',
+      message: `Round ${state.round} generation started.`,
+      timestamp: Date.now(),
+      round: state.round,
+      phase: state.phase,
+    });
 
     await generator.generate({
       description: state.userDescription,
@@ -244,7 +273,7 @@ export function createApp(options: CreateAppOptions = {}) {
       phase: state.phase,
       outputDir,
       previousScores,
-    });
+    }, broadcastProgress);
 
     const variants = listVariants(activeDir(), state.round, activePublicBasePath());
     if (variants.length === 0) {
@@ -252,7 +281,26 @@ export function createApp(options: CreateAppOptions = {}) {
     }
 
     console.info(`[Design Explorer] Generated ${variants.length} variant(s). round=${state.round} outputDir=${outputDir}`);
+    broadcastProgress({
+      type: 'round-completed',
+      level: 'info',
+      message: `Round ${state.round} generated ${variants.length} variant(s).`,
+      timestamp: Date.now(),
+      round: state.round,
+      phase: state.phase,
+    });
     return { ...state, variants };
+  }
+
+  function broadcastProgress(event: GenerationProgressEvent): void {
+    for (const client of progressClients) {
+      if (client.destroyed) {
+        progressClients.delete(client);
+        continue;
+      }
+
+      sendProgressEvent(client, event);
+    }
   }
 
   function activeDir(): string {
@@ -297,6 +345,10 @@ function pickHighestRatedVariant(scores: Score[]): string {
 function sendError(res: Response, error: unknown): void {
   const message = error instanceof Error ? error.message : 'Unknown error.';
   res.status(400).json({ error: message });
+}
+
+function sendProgressEvent(res: Response, event: GenerationProgressEvent): void {
+  res.write(`event: progress\ndata: ${JSON.stringify(event)}\n\n`);
 }
 
 function emptyState(): ExplorerState {

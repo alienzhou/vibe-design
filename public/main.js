@@ -12,9 +12,14 @@
   var currentModalVariant = null;
   var pendingDescription = "";
   var currentClarification = null;
+  var progressSource = null;
   var startScreen = query("start-screen");
   var galleryScreen = query("gallery-screen");
   var loadingOverlay = query("loading-overlay");
+  var loadingTitle = query("loading-title");
+  var loadingHint = query("loading-hint");
+  var progressPanel = query("progress-panel");
+  var progressList = query("progress-list");
   var modalOverlay = query("modal-overlay");
   var clarificationPanel = query("clarification-panel");
   var clarificationQuestions = query("clarification-questions");
@@ -101,7 +106,10 @@
       return;
     }
     pendingDescription = description;
-    showLoading();
+    showLoading({
+      title: "\u6B63\u5728\u68B3\u7406\u9700\u6C42...",
+      hint: "AI \u6B63\u5728\u5224\u65AD\u8FD8\u9700\u8981\u8865\u5145\u54EA\u4E9B\u5173\u952E\u4FE1\u606F"
+    });
     try {
       const data = await requestJson("/api/clarify", {
         method: "POST",
@@ -124,7 +132,11 @@
       return;
     }
     const description = buildClarifiedDescription(pendingDescription, currentClarification, answers);
-    showLoading();
+    showLoading({
+      title: "\u6B63\u5728\u751F\u6210\u8BBE\u8BA1\u53D8\u4F53...",
+      hint: "\u6B63\u5728\u542F\u52A8 Claude Code worker...",
+      streamProgress: true
+    });
     try {
       const state = await requestJson("/api/start", {
         method: "POST",
@@ -144,7 +156,10 @@
     renderExplorations(data.explorations);
   }
   async function selectExploration(id) {
-    showLoading();
+    showLoading({
+      title: "\u6B63\u5728\u6253\u5F00\u63A2\u7D22...",
+      hint: "\u6B63\u5728\u52A0\u8F7D\u5386\u53F2\u53D8\u4F53"
+    });
     try {
       const state = await requestJson(`/api/explorations/${encodeURIComponent(id)}/select`, {
         method: "POST"
@@ -171,7 +186,11 @@
     });
   }
   async function nextRound() {
-    showLoading();
+    showLoading({
+      title: "\u6B63\u5728\u751F\u6210\u4E0B\u4E00\u8F6E...",
+      hint: "AI \u6B63\u5728\u7ED3\u5408\u8BC4\u5206\u53CD\u9988\u7EE7\u7EED\u63A2\u7D22",
+      streamProgress: true
+    });
     try {
       const state = await requestJson("/api/next-round", {
         method: "POST",
@@ -340,11 +359,89 @@
     pendingDescription = "";
     loadExplorations().catch(showError);
   }
-  function showLoading() {
+  function showLoading(options) {
+    loadingTitle.textContent = options.title;
+    loadingHint.textContent = options.hint;
+    progressList.innerHTML = "";
+    progressPanel.classList.toggle("hidden", !options.streamProgress);
     loadingOverlay.classList.remove("hidden");
+    if (options.streamProgress) {
+      openProgressStream();
+    } else {
+      closeProgressStream();
+    }
   }
   function hideLoading() {
+    closeProgressStream();
     loadingOverlay.classList.add("hidden");
+  }
+  function openProgressStream() {
+    closeProgressStream();
+    progressPanel.classList.remove("hidden");
+    appendProgressEvent({
+      type: "round-started",
+      level: "info",
+      message: "\u6B63\u5728\u8FDE\u63A5\u751F\u6210\u8FDB\u5EA6...",
+      timestamp: Date.now()
+    });
+    progressSource = new EventSource("/api/progress");
+    progressSource.addEventListener("progress", (event) => {
+      const payload = JSON.parse(event.data);
+      renderProgressEvent(payload);
+    });
+    progressSource.onerror = () => {
+      loadingHint.textContent = "\u8FDB\u5EA6\u8FDE\u63A5\u6682\u65F6\u4E2D\u65AD\uFF0C\u6700\u7EC8\u7ED3\u679C\u4ECD\u4F1A\u5728\u751F\u6210\u5B8C\u6210\u540E\u8FD4\u56DE";
+    };
+  }
+  function closeProgressStream() {
+    progressSource?.close();
+    progressSource = null;
+  }
+  function renderProgressEvent(event) {
+    loadingHint.textContent = progressHint(event);
+    appendProgressEvent(event);
+  }
+  function appendProgressEvent(event) {
+    const item = document.createElement("div");
+    item.className = "progress-item";
+    item.dataset.level = event.level;
+    item.innerHTML = `
+    <div class="progress-item-status">${escapeHtml(progressStatus(event))}</div>
+    <div class="progress-message">${escapeHtml(progressMessage(event))}</div>
+  `;
+    progressList.appendChild(item);
+    while (progressList.children.length > 80) {
+      progressList.firstElementChild?.remove();
+    }
+    progressList.scrollTop = progressList.scrollHeight;
+  }
+  function progressStatus(event) {
+    if (event.variantId) {
+      return event.variantId;
+    }
+    if (typeof event.round === "number") {
+      return `round ${event.round}`;
+    }
+    return event.level;
+  }
+  function progressMessage(event) {
+    const prefix = event.stream ? `[${event.stream}] ` : "";
+    return `${prefix}${event.message}`;
+  }
+  function progressHint(event) {
+    if (event.type === "round-completed") {
+      return "\u8BBE\u8BA1\u53D8\u4F53\u751F\u6210\u5B8C\u6210\uFF0C\u6B63\u5728\u5237\u65B0\u9875\u9762";
+    }
+    if (event.type === "variant-output" && event.variantId) {
+      return `${event.variantId} \u6B63\u5728\u8F93\u51FA\u5185\u5BB9`;
+    }
+    if (event.type === "variant-started" && event.variantId) {
+      return `${event.variantId} \u5DF2\u5F00\u59CB\u751F\u6210`;
+    }
+    if (event.type === "variant-completed" && event.variantId) {
+      return `${event.variantId} \u5DF2\u5B8C\u6210`;
+    }
+    return event.message;
   }
   async function requestJson(url, init) {
     const response = await fetch(url, init);

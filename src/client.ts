@@ -63,6 +63,33 @@ interface ClarificationPayload {
   assumptions: string[];
 }
 
+type ProgressLevel = 'info' | 'warn' | 'error';
+type ProgressType =
+  | 'round-started'
+  | 'round-completed'
+  | 'variant-started'
+  | 'variant-output'
+  | 'variant-completed'
+  | 'variant-failed'
+  | 'variant-fallback';
+
+interface GenerationProgressEvent {
+  type: ProgressType;
+  level: ProgressLevel;
+  message: string;
+  timestamp: number;
+  round?: number;
+  phase?: Phase;
+  variantId?: string;
+  stream?: 'stdout' | 'stderr';
+}
+
+interface LoadingOptions {
+  title: string;
+  hint: string;
+  streamProgress?: boolean;
+}
+
 const currentState: ClientState = {
   id: '',
   round: 0,
@@ -75,10 +102,15 @@ const currentState: ClientState = {
 let currentModalVariant: Variant | null = null;
 let pendingDescription = '';
 let currentClarification: ClarificationPayload | null = null;
+let progressSource: EventSource | null = null;
 
 const startScreen = query<HTMLElement>('start-screen');
 const galleryScreen = query<HTMLElement>('gallery-screen');
 const loadingOverlay = query<HTMLElement>('loading-overlay');
+const loadingTitle = query<HTMLElement>('loading-title');
+const loadingHint = query<HTMLElement>('loading-hint');
+const progressPanel = query<HTMLElement>('progress-panel');
+const progressList = query<HTMLElement>('progress-list');
 const modalOverlay = query<HTMLElement>('modal-overlay');
 const clarificationPanel = query<HTMLElement>('clarification-panel');
 const clarificationQuestions = query<HTMLElement>('clarification-questions');
@@ -184,7 +216,10 @@ async function prepareClarification(): Promise<void> {
   }
 
   pendingDescription = description;
-  showLoading();
+  showLoading({
+    title: '正在梳理需求...',
+    hint: 'AI 正在判断还需要补充哪些关键信息',
+  });
 
   try {
     const data = await requestJson<{ payload: ClarificationPayload; source: 'claude' | 'fallback' }>('/api/clarify', {
@@ -211,7 +246,11 @@ async function startExploration(skipClarification = false): Promise<void> {
   }
 
   const description = buildClarifiedDescription(pendingDescription, currentClarification, answers);
-  showLoading();
+  showLoading({
+    title: '正在生成设计变体...',
+    hint: '正在启动 Claude Code worker...',
+    streamProgress: true,
+  });
 
   try {
     const state = await requestJson<ExplorerState>('/api/start', {
@@ -235,7 +274,10 @@ async function loadExplorations(): Promise<void> {
 }
 
 async function selectExploration(id: string): Promise<void> {
-  showLoading();
+  showLoading({
+    title: '正在打开探索...',
+    hint: '正在加载历史变体',
+  });
 
   try {
     const state = await requestJson<ExplorerState>(`/api/explorations/${encodeURIComponent(id)}/select`, {
@@ -267,7 +309,11 @@ async function saveScore(rating: Rating): Promise<void> {
 }
 
 async function nextRound(): Promise<void> {
-  showLoading();
+  showLoading({
+    title: '正在生成下一轮...',
+    hint: 'AI 正在结合评分反馈继续探索',
+    streamProgress: true,
+  });
 
   try {
     const state = await requestJson<ExplorerState>('/api/next-round', {
@@ -472,12 +518,106 @@ function hideClarification(): void {
   loadExplorations().catch(showError);
 }
 
-function showLoading(): void {
+function showLoading(options: LoadingOptions): void {
+  loadingTitle.textContent = options.title;
+  loadingHint.textContent = options.hint;
+  progressList.innerHTML = '';
+  progressPanel.classList.toggle('hidden', !options.streamProgress);
   loadingOverlay.classList.remove('hidden');
+  if (options.streamProgress) {
+    openProgressStream();
+  } else {
+    closeProgressStream();
+  }
 }
 
 function hideLoading(): void {
+  closeProgressStream();
   loadingOverlay.classList.add('hidden');
+}
+
+function openProgressStream(): void {
+  closeProgressStream();
+  progressPanel.classList.remove('hidden');
+  appendProgressEvent({
+    type: 'round-started',
+    level: 'info',
+    message: '正在连接生成进度...',
+    timestamp: Date.now(),
+  });
+
+  progressSource = new EventSource('/api/progress');
+  progressSource.addEventListener('progress', (event) => {
+    const payload = JSON.parse((event as MessageEvent).data) as GenerationProgressEvent;
+    renderProgressEvent(payload);
+  });
+  progressSource.onerror = () => {
+    loadingHint.textContent = '进度连接暂时中断，最终结果仍会在生成完成后返回';
+  };
+}
+
+function closeProgressStream(): void {
+  progressSource?.close();
+  progressSource = null;
+}
+
+function renderProgressEvent(event: GenerationProgressEvent): void {
+  loadingHint.textContent = progressHint(event);
+  appendProgressEvent(event);
+}
+
+function appendProgressEvent(event: GenerationProgressEvent): void {
+  const item = document.createElement('div');
+  item.className = 'progress-item';
+  item.dataset.level = event.level;
+  item.innerHTML = `
+    <div class="progress-item-status">${escapeHtml(progressStatus(event))}</div>
+    <div class="progress-message">${escapeHtml(progressMessage(event))}</div>
+  `;
+  progressList.appendChild(item);
+
+  while (progressList.children.length > 80) {
+    progressList.firstElementChild?.remove();
+  }
+
+  progressList.scrollTop = progressList.scrollHeight;
+}
+
+function progressStatus(event: GenerationProgressEvent): string {
+  if (event.variantId) {
+    return event.variantId;
+  }
+
+  if (typeof event.round === 'number') {
+    return `round ${event.round}`;
+  }
+
+  return event.level;
+}
+
+function progressMessage(event: GenerationProgressEvent): string {
+  const prefix = event.stream ? `[${event.stream}] ` : '';
+  return `${prefix}${event.message}`;
+}
+
+function progressHint(event: GenerationProgressEvent): string {
+  if (event.type === 'round-completed') {
+    return '设计变体生成完成，正在刷新页面';
+  }
+
+  if (event.type === 'variant-output' && event.variantId) {
+    return `${event.variantId} 正在输出内容`;
+  }
+
+  if (event.type === 'variant-started' && event.variantId) {
+    return `${event.variantId} 已开始生成`;
+  }
+
+  if (event.type === 'variant-completed' && event.variantId) {
+    return `${event.variantId} 已完成`;
+  }
+
+  return event.message;
 }
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
