@@ -473,14 +473,17 @@ body {
 }
 
 .modal-body {
+  display: flex;
   flex: 1;
   min-height: 0;
 }
 
 .preview-frame-container {
+  flex: 1;
   background: #0f0f0f;
   min-width: 0;
   min-height: 0;
+  height: 100%;
 }
 
 .preview-frame-container iframe {
