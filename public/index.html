@@ -30,6 +30,17 @@
           />
           <button id="start-btn" class="btn-primary">开始探索</button>
         </div>
+        <div id="clarification-panel" class="clarification-panel hidden">
+          <div class="clarification-header">
+            <h3>先补充几个关键信息</h3>
+            <p>回答后再生成变体，这能帮助 AI 先理解设计目标，而不是直接进入出图。</p>
+          </div>
+          <div id="clarification-questions" class="clarification-questions"></div>
+          <div class="clarification-actions">
+            <button id="submit-clarification-btn" class="btn-primary">确认并生成变体</button>
+            <button id="cancel-clarification-btn" class="btn-secondary">返回修改描述</button>
+          </div>
+        </div>
         <div id="explorations-panel" class="explorations-panel hidden">
           <div class="explorations-header">
             <h3>已有探索</h3>

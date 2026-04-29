@@ -107,6 +107,86 @@ body {
   color: #666;
 }
 
+.clarification-panel {
+  margin-top: 24px;
+  padding: 20px;
+  border: 1px solid #2a2a2a;
+  border-radius: 16px;
+  background: #141414;
+  text-align: left;
+}
+
+.clarification-header {
+  margin-bottom: 18px;
+}
+
+.clarification-header h3 {
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+
+.clarification-header p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.clarification-questions {
+  display: grid;
+  gap: 16px;
+}
+
+.clarification-question label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.clarification-question .why {
+  margin: 0 0 10px;
+  color: #888;
+  font-size: 12px;
+}
+
+.clarification-question input,
+.clarification-question select {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  background: #1a1a1a;
+  color: #fff;
+  font-size: 14px;
+}
+
+.clarification-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.clarification-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 12px;
+  border: 1px solid #2a2a2a;
+  border-radius: 999px;
+  background: #1a1a1a;
+  color: #ddd;
+  font-size: 13px;
+}
+
+.clarification-option input {
+  width: auto;
+}
+
+.clarification-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+}
+
 .explorations-panel {
   margin-top: 32px;
   padding: 20px;
