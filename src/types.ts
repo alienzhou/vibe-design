@@ -42,14 +42,26 @@ export interface RoundState {
 }
 
 export interface ExplorerState {
+  id: string;
   round: number;
   phase: Phase;
   variants: Variant[];
   scores: Score[];
   userDescription: string;
   history: RoundState[];
+  createdAt: number;
+  updatedAt: number;
   finalizedVariantId?: string;
   finalOutputPath?: string;
+}
+
+export interface ExplorationSummary {
+  id: string;
+  description: string;
+  round: number;
+  phase: Phase;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface GenerationRequest {

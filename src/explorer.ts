@@ -1,18 +1,26 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ExplorerState, Phase, Rating, Score, Variant } from './types.js';
+import type { ExplorationSummary, ExplorerState, Phase, Rating, Score, Variant } from './types.js';
 
 export const VARIANT_ID_PATTERN = /^variant-\d+$/;
+export const LEGACY_EXPLORATION_ID = 'legacy';
 
-export function createInitialState(description: string): ExplorerState {
+export function createInitialState(description: string, id = createExplorationId(), timestamp = Date.now()): ExplorerState {
   return {
+    id,
     round: 1,
     phase: 'explore',
     variants: [],
     scores: [],
     userDescription: description,
     history: [],
+    createdAt: timestamp,
+    updatedAt: timestamp,
   };
+}
+
+export function createExplorationId(timestamp = Date.now()): string {
+  return `exploration-${new Date(timestamp).toISOString().replace(/[:.]/g, '-')}`;
 }
 
 export function assertRating(value: unknown): asserts value is Rating {
@@ -125,7 +133,7 @@ export function roundDir(workspaceDir: string, round: number): string {
   return join(workspaceDir, `round-${round}`);
 }
 
-export function listVariants(workspaceDir: string, round: number): Variant[] {
+export function listVariants(workspaceDir: string, round: number, publicBasePath = '/workspace'): Variant[] {
   const dir = roundDir(workspaceDir, round);
 
   if (!existsSync(dir)) {
@@ -141,9 +149,69 @@ export function listVariants(workspaceDir: string, round: number): Variant[] {
         id,
         round,
         filename,
-        path: `/workspace/round-${round}/${filename}`,
+        path: `${publicBasePath}/round-${round}/${filename}`,
       };
     });
+}
+
+export function explorationsDir(workspaceDir: string): string {
+  return join(workspaceDir, 'explorations');
+}
+
+export function explorationDir(workspaceDir: string, id: string): string {
+  return id === LEGACY_EXPLORATION_ID ? workspaceDir : join(explorationsDir(workspaceDir), id);
+}
+
+export function currentExplorationFile(workspaceDir: string): string {
+  return join(workspaceDir, 'current-exploration.json');
+}
+
+export function readCurrentExplorationId(workspaceDir: string): string | null {
+  const file = currentExplorationFile(workspaceDir);
+
+  if (!existsSync(file)) {
+    return null;
+  }
+
+  const payload = JSON.parse(readFileSync(file, 'utf-8')) as { id?: unknown };
+  return typeof payload.id === 'string' ? payload.id : null;
+}
+
+export function writeCurrentExplorationId(workspaceDir: string, id: string): void {
+  ensureDir(workspaceDir);
+  writeFileSync(currentExplorationFile(workspaceDir), JSON.stringify({ id }, null, 2));
+}
+
+export function listExplorations(workspaceDir: string): ExplorationSummary[] {
+  const summaries: ExplorationSummary[] = [];
+  const legacyState = readState(workspaceDir);
+
+  if (legacyState) {
+    summaries.push(toExplorationSummary({ ...legacyState, id: legacyState.id || LEGACY_EXPLORATION_ID }));
+  }
+
+  const root = explorationsDir(workspaceDir);
+  if (existsSync(root)) {
+    for (const id of readdirSync(root)) {
+      const state = readState(join(root, id));
+      if (state) {
+        summaries.push(toExplorationSummary({ ...state, id: state.id || id }));
+      }
+    }
+  }
+
+  return summaries.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export function toExplorationSummary(state: ExplorerState): ExplorationSummary {
+  return {
+    id: state.id,
+    description: state.userDescription,
+    round: state.round,
+    phase: state.phase,
+    createdAt: state.createdAt ?? 0,
+    updatedAt: state.updatedAt ?? state.createdAt ?? 0,
+  };
 }
 
 export function stateFile(workspaceDir: string): string {
@@ -157,10 +225,17 @@ export function readState(workspaceDir: string): ExplorerState | null {
     return null;
   }
 
-  return JSON.parse(readFileSync(file, 'utf-8')) as ExplorerState;
+  const state = JSON.parse(readFileSync(file, 'utf-8')) as ExplorerState;
+  return {
+    ...state,
+    id: state.id || LEGACY_EXPLORATION_ID,
+    createdAt: state.createdAt ?? 0,
+    updatedAt: state.updatedAt ?? state.createdAt ?? 0,
+  };
 }
 
 export function writeState(workspaceDir: string, state: ExplorerState): void {
   ensureDir(workspaceDir);
+  state.updatedAt = Date.now();
   writeFileSync(stateFile(workspaceDir), JSON.stringify(state, null, 2));
 }

@@ -1,14 +1,18 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { CLARIFICATION_TAG, parseClarificationPayload } from './clarification.js';
 import {
   buildGenerationPrompt,
+  createInitialState,
+  explorationDir,
   listVariants,
+  listExplorations,
   resolveNextPhase,
   shouldEnterConverge,
   upsertScore,
+  writeState,
 } from './explorer.js';
 import { FallbackVariantGenerator, MockVariantGenerator, type VariantGenerator } from './generator.js';
 import { buildVariantPromptPlans } from './prompt-planner.js';
@@ -91,6 +95,28 @@ describe('explorer workflow', () => {
       type: 'single_select',
       options: ['manager', 'engineer'],
     });
+  });
+
+  it('lists multiple exploration batches by update time', () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'design-explorer-'));
+
+    try {
+      const first = createInitialState('First exploration', 'exploration-first', 100);
+      const second = createInitialState('Second exploration', 'exploration-second', 200);
+      const firstDir = explorationDir(workspace, first.id);
+      const secondDir = explorationDir(workspace, second.id);
+      writeState(firstDir, first);
+      writeState(secondDir, second);
+      writeFileSync(join(firstDir, 'state.json'), JSON.stringify({ ...first, updatedAt: 100 }, null, 2));
+      writeFileSync(join(secondDir, 'state.json'), JSON.stringify({ ...second, updatedAt: 200 }, null, 2));
+
+      const explorations = listExplorations(workspace);
+      expect(explorations).toHaveLength(2);
+      expect(explorations[0].description).toBe('Second exploration');
+      expect(explorations[1].description).toBe('First exploration');
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   it('mock generator writes the expected variant count for each phase', async () => {

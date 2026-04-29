@@ -2,6 +2,7 @@
 (() => {
   // src/client.ts
   var currentState = {
+    id: "",
     round: 0,
     phase: "explore",
     variants: [],
@@ -13,8 +14,11 @@
   var galleryScreen = query("gallery-screen");
   var loadingOverlay = query("loading-overlay");
   var modalOverlay = query("modal-overlay");
+  var explorationsPanel = query("explorations-panel");
+  var explorationsList = query("explorations-list");
   var descriptionInput = query("description-input");
   var startBtn = query("start-btn");
+  var backToStartBtn = query("back-to-start-btn");
   var nextRoundBtn = query("next-round-btn");
   var finalizeBtn = query("finalize-btn");
   var phaseBadge = query("phase-badge");
@@ -38,6 +42,10 @@
   });
   nextRoundBtn.addEventListener("click", () => {
     nextRound().catch(showError);
+  });
+  backToStartBtn.addEventListener("click", () => {
+    showStart();
+    loadExplorations().catch(showError);
   });
   finalizeBtn.addEventListener("click", () => {
     finalizeDesign().catch(showError);
@@ -68,7 +76,7 @@
       closeVariantModal();
     }
   });
-  loadExistingState().catch(showError);
+  loadExplorations().catch(showError);
   async function startExploration() {
     const description = descriptionInput.value.trim();
     if (!description) {
@@ -89,15 +97,22 @@
       hideLoading();
     }
   }
-  async function loadExistingState() {
-    const state = await requestJson("/api/state");
-    if (state.round === 0) {
+  async function loadExplorations() {
+    const data = await requestJson("/api/explorations");
+    renderExplorations(data.explorations);
+  }
+  async function selectExploration(id) {
+    showLoading();
+    try {
+      const state = await requestJson(`/api/explorations/${encodeURIComponent(id)}/select`, {
+        method: "POST"
+      });
+      applyServerState(state);
+      showGallery();
       render();
-      return;
+    } finally {
+      hideLoading();
     }
-    applyServerState(state);
-    showGallery();
-    render();
   }
   async function saveScore(rating) {
     if (!currentModalVariant) {
@@ -147,6 +162,27 @@
     updatePhaseDisplay();
     renderVariants();
     updateActionButtons();
+  }
+  function renderExplorations(explorations) {
+    explorationsPanel.classList.toggle("hidden", explorations.length === 0);
+    explorationsList.innerHTML = "";
+    explorations.forEach((exploration) => {
+      const item = document.createElement("div");
+      item.className = "exploration-item";
+      item.innerHTML = `
+      <div>
+        <div class="exploration-title">${escapeHtml(exploration.description || "\u672A\u547D\u540D\u63A2\u7D22")}</div>
+        <div class="exploration-meta">
+          Round ${exploration.round} \xB7 ${phaseLabel(exploration.phase)} \xB7 ${formatDate(exploration.updatedAt)}
+        </div>
+      </div>
+      <button class="btn-secondary" type="button">\u7EE7\u7EED</button>
+    `;
+      item.querySelector("button")?.addEventListener("click", () => {
+        selectExploration(exploration.id).catch(showError);
+      });
+      explorationsList.appendChild(item);
+    });
   }
   function renderVariants() {
     variantsGrid.innerHTML = "";
@@ -210,16 +246,12 @@
     finalizeBtn.classList.toggle("hidden", currentState.phase !== "converge" || scoredCount === 0);
   }
   function updatePhaseDisplay() {
-    const phaseText = {
-      explore: "\u63A2\u7D22",
-      converge: "\u5BF9\u6218",
-      finalized: "\u5DF2\u5B9A\u7A3F"
-    };
-    phaseBadge.textContent = `Phase: ${phaseText[currentState.phase]}`;
+    phaseBadge.textContent = `Phase: ${phaseLabel(currentState.phase)}`;
     roundBadge.textContent = `Round ${currentState.round}`;
     currentRound.textContent = String(currentState.round);
   }
   function applyServerState(state) {
+    currentState.id = state.id;
     currentState.round = state.round;
     currentState.phase = state.phase;
     currentState.variants = state.variants;
@@ -237,6 +269,11 @@
   function showGallery() {
     startScreen.classList.add("hidden");
     galleryScreen.classList.remove("hidden");
+  }
+  function showStart() {
+    closeVariantModal();
+    galleryScreen.classList.add("hidden");
+    startScreen.classList.remove("hidden");
   }
   function showLoading() {
     loadingOverlay.classList.remove("hidden");
@@ -258,6 +295,37 @@
       return typeof error === "string" ? error : null;
     }
     return null;
+  }
+  function phaseLabel(phase) {
+    const phaseText = {
+      explore: "\u63A2\u7D22",
+      converge: "\u5BF9\u6218",
+      finalized: "\u5DF2\u5B9A\u7A3F"
+    };
+    return phaseText[phase];
+  }
+  function formatDate(timestamp) {
+    if (!timestamp) {
+      return "\u672A\u77E5\u65F6\u95F4";
+    }
+    return new Intl.DateTimeFormat("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    }).format(new Date(timestamp));
+  }
+  function escapeHtml(value) {
+    return value.replace(/[&<>"']/g, (char) => {
+      const map = {
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      };
+      return map[char];
+    });
   }
   function query(id) {
     const element = document.getElementById(id);

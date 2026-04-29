@@ -15,6 +15,7 @@ interface Score {
 }
 
 interface ExplorerState {
+  id: string;
   round: number;
   phase: Phase;
   variants: Variant[];
@@ -24,6 +25,7 @@ interface ExplorerState {
 }
 
 interface ClientState {
+  id: string;
   round: number;
   phase: Phase;
   variants: Variant[];
@@ -32,7 +34,17 @@ interface ClientState {
   finalOutputPath?: string;
 }
 
+interface ExplorationSummary {
+  id: string;
+  description: string;
+  round: number;
+  phase: Phase;
+  createdAt: number;
+  updatedAt: number;
+}
+
 const currentState: ClientState = {
+  id: '',
   round: 0,
   phase: 'explore',
   variants: [],
@@ -46,8 +58,11 @@ const startScreen = query<HTMLElement>('start-screen');
 const galleryScreen = query<HTMLElement>('gallery-screen');
 const loadingOverlay = query<HTMLElement>('loading-overlay');
 const modalOverlay = query<HTMLElement>('modal-overlay');
+const explorationsPanel = query<HTMLElement>('explorations-panel');
+const explorationsList = query<HTMLElement>('explorations-list');
 const descriptionInput = query<HTMLInputElement>('description-input');
 const startBtn = query<HTMLButtonElement>('start-btn');
+const backToStartBtn = query<HTMLButtonElement>('back-to-start-btn');
 const nextRoundBtn = query<HTMLButtonElement>('next-round-btn');
 const finalizeBtn = query<HTMLButtonElement>('finalize-btn');
 const phaseBadge = query<HTMLElement>('phase-badge');
@@ -74,6 +89,11 @@ startBtn.addEventListener('click', () => {
 
 nextRoundBtn.addEventListener('click', () => {
   nextRound().catch(showError);
+});
+
+backToStartBtn.addEventListener('click', () => {
+  showStart();
+  loadExplorations().catch(showError);
 });
 
 finalizeBtn.addEventListener('click', () => {
@@ -114,7 +134,7 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
-loadExistingState().catch(showError);
+loadExplorations().catch(showError);
 
 async function startExploration(): Promise<void> {
   const description = descriptionInput.value.trim();
@@ -140,16 +160,24 @@ async function startExploration(): Promise<void> {
   }
 }
 
-async function loadExistingState(): Promise<void> {
-  const state = await requestJson<ExplorerState>('/api/state');
-  if (state.round === 0) {
-    render();
-    return;
-  }
+async function loadExplorations(): Promise<void> {
+  const data = await requestJson<{ explorations: ExplorationSummary[] }>('/api/explorations');
+  renderExplorations(data.explorations);
+}
 
-  applyServerState(state);
-  showGallery();
-  render();
+async function selectExploration(id: string): Promise<void> {
+  showLoading();
+
+  try {
+    const state = await requestJson<ExplorerState>(`/api/explorations/${encodeURIComponent(id)}/select`, {
+      method: 'POST',
+    });
+    applyServerState(state);
+    showGallery();
+    render();
+  } finally {
+    hideLoading();
+  }
 }
 
 async function saveScore(rating: Rating): Promise<void> {
@@ -209,6 +237,30 @@ function render(): void {
   updatePhaseDisplay();
   renderVariants();
   updateActionButtons();
+}
+
+function renderExplorations(explorations: ExplorationSummary[]): void {
+  explorationsPanel.classList.toggle('hidden', explorations.length === 0);
+  explorationsList.innerHTML = '';
+
+  explorations.forEach((exploration) => {
+    const item = document.createElement('div');
+    item.className = 'exploration-item';
+    item.innerHTML = `
+      <div>
+        <div class="exploration-title">${escapeHtml(exploration.description || '未命名探索')}</div>
+        <div class="exploration-meta">
+          Round ${exploration.round} · ${phaseLabel(exploration.phase)} · ${formatDate(exploration.updatedAt)}
+        </div>
+      </div>
+      <button class="btn-secondary" type="button">继续</button>
+    `;
+
+    item.querySelector('button')?.addEventListener('click', () => {
+      selectExploration(exploration.id).catch(showError);
+    });
+    explorationsList.appendChild(item);
+  });
 }
 
 function renderVariants(): void {
@@ -289,18 +341,13 @@ function updateActionButtons(): void {
 }
 
 function updatePhaseDisplay(): void {
-  const phaseText: Record<Phase, string> = {
-    explore: '探索',
-    converge: '对战',
-    finalized: '已定稿',
-  };
-
-  phaseBadge.textContent = `Phase: ${phaseText[currentState.phase]}`;
+  phaseBadge.textContent = `Phase: ${phaseLabel(currentState.phase)}`;
   roundBadge.textContent = `Round ${currentState.round}`;
   currentRound.textContent = String(currentState.round);
 }
 
 function applyServerState(state: ExplorerState): void {
+  currentState.id = state.id;
   currentState.round = state.round;
   currentState.phase = state.phase;
   currentState.variants = state.variants;
@@ -321,6 +368,12 @@ function pickHighestRatedVariant(): string | null {
 function showGallery(): void {
   startScreen.classList.add('hidden');
   galleryScreen.classList.remove('hidden');
+}
+
+function showStart(): void {
+  closeVariantModal();
+  galleryScreen.classList.add('hidden');
+  startScreen.classList.remove('hidden');
 }
 
 function showLoading(): void {
@@ -349,6 +402,42 @@ function readErrorMessage(payload: unknown): string | null {
   }
 
   return null;
+}
+
+function phaseLabel(phase: Phase): string {
+  const phaseText: Record<Phase, string> = {
+    explore: '探索',
+    converge: '对战',
+    finalized: '已定稿',
+  };
+
+  return phaseText[phase];
+}
+
+function formatDate(timestamp: number): string {
+  if (!timestamp) {
+    return '未知时间';
+  }
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(timestamp));
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => {
+    const map: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    };
+    return map[char];
+  });
 }
 
 function query<T extends HTMLElement>(id: string): T {

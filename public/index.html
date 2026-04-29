@@ -30,6 +30,13 @@
           />
           <button id="start-btn" class="btn-primary">开始探索</button>
         </div>
+        <div id="explorations-panel" class="explorations-panel hidden">
+          <div class="explorations-header">
+            <h3>已有探索</h3>
+            <p>选择一个批次继续，或输入新描述重新开始。</p>
+          </div>
+          <div id="explorations-list" class="explorations-list"></div>
+        </div>
       </div>
     </div>
 
@@ -38,6 +45,7 @@
       <div class="gallery-header">
         <h3>第 <span id="current-round">1</span> 轮设计变体</h3>
         <p class="hint">点击任意卡片查看详情并评分，0-5 星表示你的喜好程度</p>
+        <button id="back-to-start-btn" class="btn-secondary">返回探索列表</button>
       </div>
 
       <div id="variants-grid" class="variants-grid">

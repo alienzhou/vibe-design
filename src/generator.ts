@@ -13,7 +13,7 @@ export interface VariantGenerator {
 export class ClaudeCliGenerator implements VariantGenerator {
   constructor(
     private readonly command = process.env.CLAUDE_CODE_COMMAND ?? 'claude',
-    private readonly timeoutMs = readPositiveInteger(process.env.CLAUDE_CODE_TIMEOUT_MS, 120_000),
+    private readonly timeoutMs = readPositiveInteger(process.env.CLAUDE_CODE_TIMEOUT_MS, 1_800_000),
     private readonly parallelism = readPositiveInteger(process.env.CLAUDE_CODE_PARALLELISM, 3),
   ) {}
 
