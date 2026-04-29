@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildGenerationPrompt,
   listVariants,
@@ -9,8 +9,8 @@ import {
   shouldEnterConverge,
   upsertScore,
 } from './explorer.js';
-import { MockVariantGenerator } from './generator.js';
-import type { Score } from './types.js';
+import { FallbackVariantGenerator, MockVariantGenerator, type VariantGenerator } from './generator.js';
+import type { GenerationRequest, GenerationResult, Score } from './types.js';
 
 describe('explorer workflow', () => {
   it('keeps scores unique per variant', () => {
@@ -72,6 +72,33 @@ describe('explorer workflow', () => {
       });
       expect(listVariants(workspace, 2)).toHaveLength(2);
     } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to mock generation when the primary generator fails', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'design-explorer-'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const failingGenerator: VariantGenerator = {
+      async generate(_request: GenerationRequest): Promise<GenerationResult> {
+        throw new Error('spawn failed');
+      },
+    };
+    const generator = new FallbackVariantGenerator(failingGenerator, new MockVariantGenerator());
+
+    try {
+      await generator.generate({
+        description: 'Dashboard',
+        round: 1,
+        phase: 'explore',
+        outputDir: join(workspace, 'round-1'),
+        previousScores: [],
+      });
+
+      expect(listVariants(workspace, 1)).toHaveLength(6);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('using mock generator'));
+    } finally {
+      warn.mockRestore();
       rmSync(workspace, { recursive: true, force: true });
     }
   });

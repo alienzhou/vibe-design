@@ -1,6 +1,7 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
 import { buildGenerationPrompt, ensureDir, variantCountForPhase } from './explorer.js';
 import type { GenerationRequest, GenerationResult } from './types.js';
 
@@ -22,10 +23,16 @@ Save all generated files directly in this directory:
 ${request.outputDir}`;
 
     return new Promise((resolve, reject) => {
-      const child = spawn(this.command, ['-p', prompt], {
-        cwd: request.outputDir,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      let child: ChildProcessByStdio<null, Readable, Readable>;
+      try {
+        child = spawn(this.command, ['-p', prompt], {
+          cwd: request.outputDir,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      } catch (error) {
+        reject(new Error(`Failed to start Claude Code: ${formatError(error)}`));
+        return;
+      }
 
       let stdout = '';
       let stderr = '';
@@ -103,12 +110,34 @@ export class MockVariantGenerator implements VariantGenerator {
   }
 }
 
+export class FallbackVariantGenerator implements VariantGenerator {
+  constructor(
+    private readonly primary: VariantGenerator,
+    private readonly fallback: VariantGenerator,
+  ) {}
+
+  async generate(request: GenerationRequest): Promise<GenerationResult> {
+    try {
+      return await this.primary.generate(request);
+    } catch (error) {
+      console.warn(`Claude Code generation failed, using mock generator: ${formatError(error)}`);
+      return this.fallback.generate(request);
+    }
+  }
+}
+
 export function createGenerator(): VariantGenerator {
-  if (process.env.DESIGN_EXPLORER_GENERATOR === 'mock') {
+  const mode = process.env.DESIGN_EXPLORER_GENERATOR;
+
+  if (mode === 'mock') {
     return new MockVariantGenerator();
   }
 
-  return new ClaudeCliGenerator();
+  if (mode === 'claude') {
+    return new ClaudeCliGenerator();
+  }
+
+  return new FallbackVariantGenerator(new ClaudeCliGenerator(), new MockVariantGenerator());
 }
 
 function renderMockHtml(description: string, name: string, background: string, text: string, accent: string): string {
@@ -211,4 +240,8 @@ function escapeHtml(value: string): string {
     };
     return map[char];
   });
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
