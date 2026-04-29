@@ -78,8 +78,15 @@
     <div id="loading-overlay" class="loading-overlay hidden">
       <div class="loading-content">
         <div class="spinner"></div>
-        <h3>正在生成设计变体...</h3>
-        <p class="loading-hint">AI 正在为你创造多种风格可能</p>
+        <h3 id="loading-title">正在生成设计变体...</h3>
+        <p id="loading-hint" class="loading-hint">AI 正在为你创造多种风格可能</p>
+        <div id="progress-panel" class="progress-panel hidden">
+          <div class="progress-panel-header">
+            <span>运行过程</span>
+            <span>实时更新</span>
+          </div>
+          <div id="progress-list" class="progress-list"></div>
+        </div>
       </div>
     </div>
 

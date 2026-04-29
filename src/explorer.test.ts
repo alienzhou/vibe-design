@@ -16,7 +16,7 @@ import {
 } from './explorer.js';
 import { buildClaudeCliArgs, ClaudeCliGenerator, FallbackVariantGenerator, MockVariantGenerator, type VariantGenerator } from './generator.js';
 import { buildVariantPromptPlans } from './prompt-planner.js';
-import type { GenerationRequest, GenerationResult, Score } from './types.js';
+import type { GenerationProgressEvent, GenerationRequest, GenerationResult, Score } from './types.js';
 
 describe('explorer workflow', () => {
   it('keeps scores unique per variant', () => {
@@ -144,6 +144,7 @@ describe('explorer workflow', () => {
   it('mock generator writes the expected variant count for each phase', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'design-explorer-'));
     const generator = new MockVariantGenerator();
+    const progressEvents: GenerationProgressEvent[] = [];
 
     try {
       const exploreDir = join(workspace, 'round-1');
@@ -153,8 +154,10 @@ describe('explorer workflow', () => {
         phase: 'explore',
         outputDir: exploreDir,
         previousScores: [],
-      });
+      }, (event) => progressEvents.push(event));
       expect(listVariants(workspace, 1)).toHaveLength(6);
+      expect(progressEvents.filter((event) => event.type === 'variant-started')).toHaveLength(6);
+      expect(progressEvents.filter((event) => event.type === 'variant-completed')).toHaveLength(6);
 
       const convergeDir = join(workspace, 'round-2');
       await generator.generate({

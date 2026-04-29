@@ -4,10 +4,10 @@ import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { ensureDir, variantCountForPhase } from './explorer.js';
 import { buildVariantPromptPlans } from './prompt-planner.js';
-import type { GenerationRequest, GenerationResult, VariantPromptPlan } from './types.js';
+import type { GenerationProgressHandler, GenerationRequest, GenerationResult, VariantPromptPlan } from './types.js';
 
 export interface VariantGenerator {
-  generate(request: GenerationRequest): Promise<GenerationResult>;
+  generate(request: GenerationRequest, onProgress?: GenerationProgressHandler): Promise<GenerationResult>;
 }
 
 export const DEFAULT_CLAUDE_CODE_ALLOWED_TOOLS = [
@@ -36,7 +36,7 @@ export class ClaudeCliGenerator implements VariantGenerator {
     private readonly allowedTools: string[] = readAllowedTools(process.env.CLAUDE_CODE_ALLOWED_TOOLS),
   ) {}
 
-  async generate(request: GenerationRequest): Promise<GenerationResult> {
+  async generate(request: GenerationRequest, onProgress?: GenerationProgressHandler): Promise<GenerationResult> {
     ensureDir(request.outputDir);
     const plans = buildVariantPromptPlans(request);
     writeGenerationLog(request.outputDir, [
@@ -54,23 +54,39 @@ export class ClaudeCliGenerator implements VariantGenerator {
     ].join('\n'));
     console.info(`[Design Explorer] Claude Code parallel generation started. outputDir=${request.outputDir} variants=${plans.length} parallelism=${this.parallelism} permissionMode=${this.permissionMode} allowedTools=${this.allowedTools.join(',')}`);
 
-    const results = await runWithConcurrency(plans, this.parallelism, (plan) => this.generateSingleVariantOrFallback(request, plan));
+    const results = await runWithConcurrency(plans, this.parallelism, (plan) => this.generateSingleVariantOrFallback(request, plan, onProgress));
     return { output: results.join('\n') };
   }
 
-  private async generateSingleVariantOrFallback(request: GenerationRequest, plan: VariantPromptPlan): Promise<string> {
+  private async generateSingleVariantOrFallback(
+    request: GenerationRequest,
+    plan: VariantPromptPlan,
+    onProgress?: GenerationProgressHandler,
+  ): Promise<string> {
     try {
-      return await this.generateSingleVariant(request, plan);
+      return await this.generateSingleVariant(request, plan, onProgress);
     } catch (error) {
       if (!this.fallbackFailedVariants) {
+        emitProgress(onProgress, {
+          type: 'variant-failed',
+          level: 'error',
+          message: `Generation failed for ${plan.variantId}: ${formatError(error)}`,
+          round: request.round,
+          phase: request.phase,
+          variantId: plan.variantId,
+        });
         throw error;
       }
 
-      return this.writeFallbackVariant(request, plan, error);
+      return this.writeFallbackVariant(request, plan, error, onProgress);
     }
   }
 
-  private async generateSingleVariant(request: GenerationRequest, plan: VariantPromptPlan): Promise<string> {
+  private async generateSingleVariant(
+    request: GenerationRequest,
+    plan: VariantPromptPlan,
+    onProgress?: GenerationProgressHandler,
+  ): Promise<string> {
     const promptPath = join(request.outputDir, `${plan.variantId}.prompt.md`);
     writeFileSync(promptPath, plan.prompt);
     writeGenerationLog(request.outputDir, [
@@ -81,6 +97,14 @@ export class ClaudeCliGenerator implements VariantGenerator {
       `prompt=${promptPath}`,
     ].join('\n'));
     console.info(`[Design Explorer] Starting ${plan.variantId}. outputFile=${plan.outputFile} prompt=${promptPath}`);
+    emitProgress(onProgress, {
+      type: 'variant-started',
+      level: 'info',
+      message: `${plan.title} started.`,
+      round: request.round,
+      phase: request.phase,
+      variantId: plan.variantId,
+    });
 
     return new Promise((resolve, reject) => {
       let child: ChildProcessByStdio<null, Readable, Readable>;
@@ -112,6 +136,14 @@ export class ClaudeCliGenerator implements VariantGenerator {
         child.kill('SIGTERM');
         writeGenerationLog(request.outputDir, `Claude Code timed out after ${this.timeoutMs}ms. variantId=${plan.variantId}. Sent SIGTERM.`, 'error');
         console.error(`[Design Explorer] Claude Code timed out after ${this.timeoutMs}ms. variantId=${plan.variantId} outputDir=${request.outputDir}`);
+        emitProgress(onProgress, {
+          type: 'variant-failed',
+          level: 'error',
+          message: `${plan.variantId} timed out after ${this.timeoutMs}ms.`,
+          round: request.round,
+          phase: request.phase,
+          variantId: plan.variantId,
+        });
         reject(new Error(`Claude Code timed out for ${plan.variantId}.`));
       }, this.timeoutMs);
 
@@ -119,12 +151,14 @@ export class ClaudeCliGenerator implements VariantGenerator {
         const text = data.toString();
         stdout += text;
         writeStreamChunk(request.outputDir, plan.variantId, 'stdout', text);
+        emitStreamProgress(onProgress, request, plan.variantId, 'stdout', text);
       });
 
       child.stderr.on('data', (data: Buffer) => {
         const text = data.toString();
         stderr += text;
         writeStreamChunk(request.outputDir, plan.variantId, 'stderr', text);
+        emitStreamProgress(onProgress, request, plan.variantId, 'stderr', text);
       });
 
       child.on('error', (error) => {
@@ -136,6 +170,14 @@ export class ClaudeCliGenerator implements VariantGenerator {
         clearTimeout(timeout);
         writeGenerationLog(request.outputDir, `Claude Code process error. variantId=${plan.variantId} error=${error.message}`, 'error');
         console.error(`[Design Explorer] Claude Code process error. variantId=${plan.variantId} error=${error.message}`);
+        emitProgress(onProgress, {
+          type: 'variant-failed',
+          level: 'error',
+          message: `Failed to start ${plan.variantId}: ${error.message}`,
+          round: request.round,
+          phase: request.phase,
+          variantId: plan.variantId,
+        });
         reject(new Error(`Failed to start Claude Code for ${plan.variantId}: ${error.message}`));
       });
 
@@ -157,24 +199,61 @@ export class ClaudeCliGenerator implements VariantGenerator {
         console.info(`[Design Explorer] Claude Code process closed. variantId=${plan.variantId} code=${code ?? 'null'} signal=${signal ?? 'null'} outputDir=${request.outputDir}`);
 
         if (code !== 0) {
+          emitProgress(onProgress, {
+            type: 'variant-failed',
+            level: 'error',
+            message: `${plan.variantId} exited with code ${code}.`,
+            round: request.round,
+            phase: request.phase,
+            variantId: plan.variantId,
+          });
           reject(new Error(`Claude Code exited with code ${code} for ${plan.variantId}: ${stderr}`));
           return;
         }
 
         if (!existsSync(join(request.outputDir, plan.outputFile))) {
+          emitProgress(onProgress, {
+            type: 'variant-failed',
+            level: 'error',
+            message: `${plan.variantId} finished without creating ${plan.outputFile}.`,
+            round: request.round,
+            phase: request.phase,
+            variantId: plan.variantId,
+          });
           reject(new Error(`Claude Code exited successfully but did not create ${plan.outputFile}.`));
           return;
         }
 
+        emitProgress(onProgress, {
+          type: 'variant-completed',
+          level: 'info',
+          message: `${plan.variantId} completed.`,
+          round: request.round,
+          phase: request.phase,
+          variantId: plan.variantId,
+        });
         resolve(stdout);
       });
     });
   }
 
-  private writeFallbackVariant(request: GenerationRequest, plan: VariantPromptPlan, error: unknown): string {
+  private writeFallbackVariant(
+    request: GenerationRequest,
+    plan: VariantPromptPlan,
+    error: unknown,
+    onProgress?: GenerationProgressHandler,
+  ): string {
     const message = `Variant generation failed, writing fallback file. variantId=${plan.variantId} reason=${formatError(error)}`;
     writeGenerationLog(request.outputDir, message, 'warn');
     console.warn(`[Design Explorer] ${message}`);
+    emitProgress(onProgress, {
+      type: 'variant-fallback',
+      level: 'warn',
+      message: `${plan.variantId} failed, using fallback variant.`,
+      round: request.round,
+      phase: request.phase,
+      variantId: plan.variantId,
+    });
 
     const html = renderMockHtml(
       `${request.description}\n\nFallback for ${plan.title}: ${plan.hypothesis}`,
@@ -189,7 +268,7 @@ export class ClaudeCliGenerator implements VariantGenerator {
 }
 
 export class MockVariantGenerator implements VariantGenerator {
-  async generate(request: GenerationRequest): Promise<GenerationResult> {
+  async generate(request: GenerationRequest, onProgress?: GenerationProgressHandler): Promise<GenerationResult> {
     ensureDir(request.outputDir);
 
     const styles = [
@@ -204,9 +283,26 @@ export class MockVariantGenerator implements VariantGenerator {
     const count = variantCountForPhase(request.phase);
 
     for (let index = 0; index < count; index += 1) {
+      const variantId = `variant-${index + 1}`;
+      emitProgress(onProgress, {
+        type: 'variant-started',
+        level: 'info',
+        message: `${variantId} mock generation started.`,
+        round: request.round,
+        phase: request.phase,
+        variantId,
+      });
       const [name, background, text, accent] = styles[index % styles.length];
       const html = renderMockHtml(request.description, name, background, text, accent);
-      writeFileSync(join(request.outputDir, `variant-${index + 1}.html`), html);
+      writeFileSync(join(request.outputDir, `${variantId}.html`), html);
+      emitProgress(onProgress, {
+        type: 'variant-completed',
+        level: 'info',
+        message: `${variantId} mock generation completed.`,
+        round: request.round,
+        phase: request.phase,
+        variantId,
+      });
     }
 
     return { output: `Generated ${count} mock variants.` };
@@ -219,14 +315,14 @@ export class FallbackVariantGenerator implements VariantGenerator {
     private readonly fallback: VariantGenerator,
   ) {}
 
-  async generate(request: GenerationRequest): Promise<GenerationResult> {
+  async generate(request: GenerationRequest, onProgress?: GenerationProgressHandler): Promise<GenerationResult> {
     try {
-      return await this.primary.generate(request);
+      return await this.primary.generate(request, onProgress);
     } catch (error) {
       const message = `Primary generation failed, using mock generator: ${formatError(error)}`;
       writeGenerationLog(request.outputDir, message, 'warn');
       console.warn(`[Design Explorer] ${message}`);
-      return this.fallback.generate(request);
+      return this.fallback.generate(request, onProgress);
     }
   }
 }
@@ -382,6 +478,45 @@ function readAllowedTools(value: string | undefined): string[] {
 
 function formatClaudeArgsForLog(args: string[]): string {
   return args.map((arg) => (arg === args.at(-1) ? '<prompt>' : arg)).join(' ');
+}
+
+function emitProgress(
+  onProgress: GenerationProgressHandler | undefined,
+  event: Omit<Parameters<GenerationProgressHandler>[0], 'timestamp'>,
+): void {
+  onProgress?.({ ...event, timestamp: Date.now() });
+}
+
+function emitStreamProgress(
+  onProgress: GenerationProgressHandler | undefined,
+  request: GenerationRequest,
+  variantId: string,
+  stream: 'stdout' | 'stderr',
+  text: string,
+): void {
+  const message = summarizeStreamChunk(text);
+  if (!message) {
+    return;
+  }
+
+  emitProgress(onProgress, {
+    type: 'variant-output',
+    level: stream === 'stderr' ? 'warn' : 'info',
+    message,
+    round: request.round,
+    phase: request.phase,
+    variantId,
+    stream,
+  });
+}
+
+function summarizeStreamChunk(text: string): string {
+  const line = text.split(/\r?\n/).map((item) => item.trim()).find(Boolean);
+  if (!line) {
+    return '';
+  }
+
+  return line.length > 220 ? `${line.slice(0, 217)}...` : line;
 }
 
 export function writeGenerationLog(outputDir: string, message: string, level: 'info' | 'warn' | 'error' = 'info'): void {

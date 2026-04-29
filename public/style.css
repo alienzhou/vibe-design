@@ -400,6 +400,7 @@ body {
 
 .loading-content {
   text-align: center;
+  width: min(720px, calc(100vw - 48px));
 }
 
 .spinner {
@@ -420,6 +421,62 @@ body {
   color: #666;
   font-size: 14px;
   margin-top: 8px;
+}
+
+.progress-panel {
+  margin-top: 24px;
+  border: 1px solid #2a2a2a;
+  border-radius: 16px;
+  background: rgba(20, 20, 20, 0.92);
+  overflow: hidden;
+  text-align: left;
+}
+
+.progress-panel-header {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #2a2a2a;
+  color: #a3a3a3;
+  font-size: 12px;
+}
+
+.progress-list {
+  display: grid;
+  gap: 10px;
+  max-height: 280px;
+  padding: 14px 16px;
+  overflow: auto;
+}
+
+.progress-item {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 12px;
+  align-items: start;
+  color: #d4d4d4;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.progress-item-status {
+  color: #8b5cf6;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.progress-item[data-level="warn"] .progress-item-status {
+  color: #fbbf24;
+}
+
+.progress-item[data-level="error"] .progress-item-status {
+  color: #f87171;
+}
+
+.progress-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* Modal */
