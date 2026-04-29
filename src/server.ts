@@ -2,19 +2,24 @@ import express, { type Request, type Response } from 'express';
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { buildClarificationPrompt, generateClarificationPayload } from './clarification.js';
 import {
   assertRating,
   assertVariantId,
   createInitialState,
   ensureDir,
+  explorationDir,
   listVariants,
+  listExplorations,
   readState,
+  readCurrentExplorationId,
   resolveNextPhase,
   roundDir,
   upsertScore,
+  writeCurrentExplorationId,
   writeState,
 } from './explorer.js';
-import { createGenerator, type VariantGenerator } from './generator.js';
+import { createGenerator, DEFAULT_CLAUDE_CODE_ALLOWED_TOOLS, type VariantGenerator } from './generator.js';
 import type { ExplorerState, Score } from './types.js';
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -32,7 +37,11 @@ interface CreateAppOptions {
 export function createApp(options: CreateAppOptions = {}) {
   const workspaceDir = options.workspaceDir ?? defaultWorkspaceDir;
   const generator = options.generator ?? createGenerator();
-  let currentState = readState(workspaceDir);
+  let currentExplorationId = readCurrentExplorationId(workspaceDir);
+  let currentState = currentExplorationId ? readState(explorationDir(workspaceDir, currentExplorationId)) : null;
+  if (!currentState) {
+    currentExplorationId = null;
+  }
 
   ensureDir(workspaceDir);
 
@@ -45,13 +54,50 @@ export function createApp(options: CreateAppOptions = {}) {
     res.json(currentState ?? emptyState());
   });
 
+  app.get('/api/explorations', (_req, res) => {
+    res.json({ explorations: listExplorations(workspaceDir), currentExplorationId });
+  });
+
+  app.post('/api/explorations/:id/select', (req, res) => {
+    try {
+      currentState = readState(explorationDir(workspaceDir, req.params.id));
+      if (!currentState) {
+        throw new Error('Exploration not found.');
+      }
+
+      currentExplorationId = currentState.id;
+      currentState.variants = listVariants(activeDir(), currentState.round, activePublicBasePath());
+      writeCurrentExplorationId(workspaceDir, currentState.id);
+      res.json(currentState);
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
   app.post('/api/start', async (req, res) => {
     try {
       const description = readDescription(req);
       currentState = createInitialState(description);
+      currentExplorationId = currentState.id;
+      ensureDir(activeDir());
+      writeCurrentExplorationId(workspaceDir, currentState.id);
       currentState = await generateRound(currentState, []);
-      writeState(workspaceDir, currentState);
+      writeState(activeDir(), currentState);
       res.json(currentState);
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/clarify', async (req, res) => {
+    try {
+      const description = readDescription(req);
+      const previousExplorations = listExplorations(workspaceDir).map((summary) => summary.description);
+      const clarification = await generateClarificationPayload(description, previousExplorations);
+      res.json({
+        prompt: buildClarificationPrompt(description, previousExplorations),
+        ...clarification,
+      });
     } catch (error) {
       sendError(res, error);
     }
@@ -63,8 +109,8 @@ export function createApp(options: CreateAppOptions = {}) {
       return;
     }
 
-    currentState.variants = listVariants(workspaceDir, currentState.round);
-    writeState(workspaceDir, currentState);
+    currentState.variants = listVariants(activeDir(), currentState.round, activePublicBasePath());
+    writeState(activeDir(), currentState);
     res.json(currentState);
   });
 
@@ -87,7 +133,7 @@ export function createApp(options: CreateAppOptions = {}) {
       }
 
       currentState.scores = upsertScore(currentState.scores, variantId, rating);
-      writeState(workspaceDir, currentState);
+      writeState(activeDir(), currentState);
       res.json({ scores: currentState.scores });
     } catch (error) {
       sendError(res, error);
@@ -120,7 +166,7 @@ export function createApp(options: CreateAppOptions = {}) {
       currentState.variants = [];
 
       currentState = await generateRound(currentState, previousScores);
-      writeState(workspaceDir, currentState);
+      writeState(activeDir(), currentState);
       res.json(currentState);
     } catch (error) {
       sendError(res, error);
@@ -136,7 +182,7 @@ export function createApp(options: CreateAppOptions = {}) {
       const id = req.params.id;
       assertVariantId(id);
 
-      const filepath = join(roundDir(workspaceDir, currentState.round), `${id}.html`);
+      const filepath = join(roundDir(activeDir(), currentState.round), `${id}.html`);
       if (!existsSync(filepath)) {
         res.status(404).json({ error: 'Variant not found.' });
         return;
@@ -163,9 +209,9 @@ export function createApp(options: CreateAppOptions = {}) {
         throw new Error('Variant not found.');
       }
 
-      const outputDir = join(workspaceDir, 'output');
+      const outputDir = join(activeDir(), 'output');
       ensureDir(outputDir);
-      copyFileSync(join(roundDir(workspaceDir, currentState.round), variant.filename), join(outputDir, 'final.html'));
+      copyFileSync(join(roundDir(activeDir(), currentState.round), variant.filename), join(outputDir, 'final.html'));
 
       const profile = {
         description: currentState.userDescription,
@@ -178,8 +224,8 @@ export function createApp(options: CreateAppOptions = {}) {
 
       currentState.phase = 'finalized';
       currentState.finalizedVariantId = variantId;
-      currentState.finalOutputPath = '/workspace/output/final.html';
-      writeState(workspaceDir, currentState);
+      currentState.finalOutputPath = `${activePublicBasePath()}/output/final.html`;
+      writeState(activeDir(), currentState);
 
       res.json(currentState);
     } catch (error) {
@@ -188,7 +234,7 @@ export function createApp(options: CreateAppOptions = {}) {
   });
 
   async function generateRound(state: ExplorerState, previousScores: Score[]): Promise<ExplorerState> {
-    const outputDir = roundDir(workspaceDir, state.round);
+    const outputDir = roundDir(activeDir(), state.round);
     ensureDir(outputDir);
     console.info(`[Design Explorer] Generating round=${state.round} phase=${state.phase} outputDir=${outputDir}`);
 
@@ -200,13 +246,31 @@ export function createApp(options: CreateAppOptions = {}) {
       previousScores,
     });
 
-    const variants = listVariants(workspaceDir, state.round);
+    const variants = listVariants(activeDir(), state.round, activePublicBasePath());
     if (variants.length === 0) {
       throw new Error('No variants were generated.');
     }
 
     console.info(`[Design Explorer] Generated ${variants.length} variant(s). round=${state.round} outputDir=${outputDir}`);
     return { ...state, variants };
+  }
+
+  function activeDir(): string {
+    if (!currentExplorationId) {
+      throw new Error('Exploration has not started.');
+    }
+
+    return explorationDir(workspaceDir, currentExplorationId);
+  }
+
+  function activePublicBasePath(): string {
+    if (!currentExplorationId) {
+      throw new Error('Exploration has not started.');
+    }
+
+    return currentExplorationId === 'legacy'
+      ? '/workspace'
+      : `/workspace/explorations/${currentExplorationId}`;
   }
 
   return app;
@@ -243,6 +307,9 @@ function emptyState(): ExplorerState {
     scores: [],
     userDescription: '',
     history: [],
+    id: '',
+    createdAt: 0,
+    updatedAt: 0,
   };
 }
 
@@ -253,6 +320,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log(`Workspace: ${defaultWorkspaceDir}`);
     console.log(`Generator mode: ${process.env.DESIGN_EXPLORER_GENERATOR ?? 'claude-with-mock-fallback'}`);
     console.log(`Claude command: ${process.env.CLAUDE_CODE_COMMAND ?? 'claude'}`);
-    console.log(`Claude timeout: ${process.env.CLAUDE_CODE_TIMEOUT_MS ?? '120000'}ms`);
+    console.log(`Claude timeout: ${process.env.CLAUDE_CODE_TIMEOUT_MS ?? '1800000'}ms`);
+    console.log(`Claude parallelism: ${process.env.CLAUDE_CODE_PARALLELISM ?? '3'}`);
+    console.log(`Claude permission mode: ${process.env.CLAUDE_CODE_PERMISSION_MODE ?? 'acceptEdits'}`);
+    console.log(`Claude allowed tools: ${process.env.CLAUDE_CODE_ALLOWED_TOOLS ?? DEFAULT_CLAUDE_CODE_ALLOWED_TOOLS.join(', ')}`);
   });
 }

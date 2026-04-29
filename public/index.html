@@ -30,6 +30,25 @@
           />
           <button id="start-btn" class="btn-primary">开始探索</button>
         </div>
+        <div id="clarification-panel" class="clarification-panel hidden">
+          <div class="clarification-header">
+            <h3>先补充几个关键信息</h3>
+            <p>回答后再生成变体，这能帮助 AI 先理解设计目标，而不是直接进入出图。</p>
+          </div>
+          <div id="clarification-questions" class="clarification-questions"></div>
+          <div class="clarification-actions">
+            <button id="submit-clarification-btn" class="btn-primary">确认并生成变体</button>
+            <button id="skip-clarification-btn" class="btn-secondary">跳过，直接生成</button>
+            <button id="cancel-clarification-btn" class="btn-secondary">返回修改描述</button>
+          </div>
+        </div>
+        <div id="explorations-panel" class="explorations-panel hidden">
+          <div class="explorations-header">
+            <h3>已有探索</h3>
+            <p>选择一个批次继续，或输入新描述重新开始。</p>
+          </div>
+          <div id="explorations-list" class="explorations-list"></div>
+        </div>
       </div>
     </div>
 
@@ -38,6 +57,7 @@
       <div class="gallery-header">
         <h3>第 <span id="current-round">1</span> 轮设计变体</h3>
         <p class="hint">点击任意卡片查看详情并评分，0-5 星表示你的喜好程度</p>
+        <button id="back-to-start-btn" class="btn-secondary">返回探索列表</button>
       </div>
 
       <div id="variants-grid" class="variants-grid">

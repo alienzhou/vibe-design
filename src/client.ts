@@ -15,6 +15,7 @@ interface Score {
 }
 
 interface ExplorerState {
+  id: string;
   round: number;
   phase: Phase;
   variants: Variant[];
@@ -24,6 +25,7 @@ interface ExplorerState {
 }
 
 interface ClientState {
+  id: string;
   round: number;
   phase: Phase;
   variants: Variant[];
@@ -32,7 +34,37 @@ interface ClientState {
   finalOutputPath?: string;
 }
 
+interface ExplorationSummary {
+  id: string;
+  description: string;
+  round: number;
+  phase: Phase;
+  createdAt: number;
+  updatedAt: number;
+}
+
+type ClarificationQuestionType = 'text' | 'single_select' | 'multi_select';
+
+interface ClarificationQuestion {
+  id: string;
+  label: string;
+  why: string;
+  type: ClarificationQuestionType;
+  required: boolean;
+  options?: string[];
+  allowOther?: boolean;
+  defaultValue?: string | string[];
+}
+
+interface ClarificationPayload {
+  version: 1;
+  summary: string;
+  questions: ClarificationQuestion[];
+  assumptions: string[];
+}
+
 const currentState: ClientState = {
+  id: '',
   round: 0,
   phase: 'explore',
   variants: [],
@@ -41,13 +73,23 @@ const currentState: ClientState = {
 };
 
 let currentModalVariant: Variant | null = null;
+let pendingDescription = '';
+let currentClarification: ClarificationPayload | null = null;
 
 const startScreen = query<HTMLElement>('start-screen');
 const galleryScreen = query<HTMLElement>('gallery-screen');
 const loadingOverlay = query<HTMLElement>('loading-overlay');
 const modalOverlay = query<HTMLElement>('modal-overlay');
+const clarificationPanel = query<HTMLElement>('clarification-panel');
+const clarificationQuestions = query<HTMLElement>('clarification-questions');
+const explorationsPanel = query<HTMLElement>('explorations-panel');
+const explorationsList = query<HTMLElement>('explorations-list');
 const descriptionInput = query<HTMLInputElement>('description-input');
 const startBtn = query<HTMLButtonElement>('start-btn');
+const submitClarificationBtn = query<HTMLButtonElement>('submit-clarification-btn');
+const skipClarificationBtn = query<HTMLButtonElement>('skip-clarification-btn');
+const cancelClarificationBtn = query<HTMLButtonElement>('cancel-clarification-btn');
+const backToStartBtn = query<HTMLButtonElement>('back-to-start-btn');
 const nextRoundBtn = query<HTMLButtonElement>('next-round-btn');
 const finalizeBtn = query<HTMLButtonElement>('finalize-btn');
 const phaseBadge = query<HTMLElement>('phase-badge');
@@ -69,11 +111,29 @@ const ratingLabels: Record<Rating, string> = {
 };
 
 startBtn.addEventListener('click', () => {
+  prepareClarification().catch(showError);
+});
+
+submitClarificationBtn.addEventListener('click', () => {
   startExploration().catch(showError);
+});
+
+skipClarificationBtn.addEventListener('click', () => {
+  startExploration(true).catch(showError);
+});
+
+cancelClarificationBtn.addEventListener('click', () => {
+  hideClarification();
+  descriptionInput.focus();
 });
 
 nextRoundBtn.addEventListener('click', () => {
   nextRound().catch(showError);
+});
+
+backToStartBtn.addEventListener('click', () => {
+  showStart();
+  loadExplorations().catch(showError);
 });
 
 finalizeBtn.addEventListener('click', () => {
@@ -114,15 +174,43 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
-loadExistingState().catch(showError);
+loadExplorations().catch(showError);
 
-async function startExploration(): Promise<void> {
+async function prepareClarification(): Promise<void> {
   const description = descriptionInput.value.trim();
   if (!description) {
     alert('Description is required.');
     return;
   }
 
+  pendingDescription = description;
+  showLoading();
+
+  try {
+    const data = await requestJson<{ payload: ClarificationPayload; source: 'claude' | 'fallback' }>('/api/clarify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description }),
+    });
+    currentClarification = data.payload;
+    renderClarification(data.payload);
+  } finally {
+    hideLoading();
+  }
+}
+
+async function startExploration(skipClarification = false): Promise<void> {
+  if (!currentClarification) {
+    await prepareClarification();
+    return;
+  }
+
+  const answers = skipClarification ? {} : collectClarificationAnswers(currentClarification);
+  if (!answers) {
+    return;
+  }
+
+  const description = buildClarifiedDescription(pendingDescription, currentClarification, answers);
   showLoading();
 
   try {
@@ -133,6 +221,7 @@ async function startExploration(): Promise<void> {
     });
 
     applyServerState(state);
+    hideClarification();
     showGallery();
     render();
   } finally {
@@ -140,16 +229,24 @@ async function startExploration(): Promise<void> {
   }
 }
 
-async function loadExistingState(): Promise<void> {
-  const state = await requestJson<ExplorerState>('/api/state');
-  if (state.round === 0) {
-    render();
-    return;
-  }
+async function loadExplorations(): Promise<void> {
+  const data = await requestJson<{ explorations: ExplorationSummary[] }>('/api/explorations');
+  renderExplorations(data.explorations);
+}
 
-  applyServerState(state);
-  showGallery();
-  render();
+async function selectExploration(id: string): Promise<void> {
+  showLoading();
+
+  try {
+    const state = await requestJson<ExplorerState>(`/api/explorations/${encodeURIComponent(id)}/select`, {
+      method: 'POST',
+    });
+    applyServerState(state);
+    showGallery();
+    render();
+  } finally {
+    hideLoading();
+  }
 }
 
 async function saveScore(rating: Rating): Promise<void> {
@@ -209,6 +306,49 @@ function render(): void {
   updatePhaseDisplay();
   renderVariants();
   updateActionButtons();
+}
+
+function renderExplorations(explorations: ExplorationSummary[]): void {
+  explorationsPanel.classList.toggle('hidden', explorations.length === 0);
+  explorationsList.innerHTML = '';
+
+  explorations.forEach((exploration) => {
+    const item = document.createElement('div');
+    item.className = 'exploration-item';
+    item.innerHTML = `
+      <div>
+        <div class="exploration-title">${escapeHtml(exploration.description || '未命名探索')}</div>
+        <div class="exploration-meta">
+          Round ${exploration.round} · ${phaseLabel(exploration.phase)} · ${formatDate(exploration.updatedAt)}
+        </div>
+      </div>
+      <button class="btn-secondary" type="button">继续</button>
+    `;
+
+    item.querySelector('button')?.addEventListener('click', () => {
+      selectExploration(exploration.id).catch(showError);
+    });
+    explorationsList.appendChild(item);
+  });
+}
+
+function renderClarification(payload: ClarificationPayload): void {
+  clarificationQuestions.innerHTML = '';
+
+  payload.questions.forEach((question) => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'clarification-question';
+    wrapper.dataset.questionId = question.id;
+    wrapper.innerHTML = `
+      <label>${escapeHtml(question.label)}${question.required ? ' *' : ''}</label>
+      <p class="why">${escapeHtml(question.why)}</p>
+      ${renderQuestionInput(question)}
+    `;
+    clarificationQuestions.appendChild(wrapper);
+  });
+
+  clarificationPanel.classList.remove('hidden');
+  explorationsPanel.classList.add('hidden');
 }
 
 function renderVariants(): void {
@@ -289,18 +429,13 @@ function updateActionButtons(): void {
 }
 
 function updatePhaseDisplay(): void {
-  const phaseText: Record<Phase, string> = {
-    explore: '探索',
-    converge: '对战',
-    finalized: '已定稿',
-  };
-
-  phaseBadge.textContent = `Phase: ${phaseText[currentState.phase]}`;
+  phaseBadge.textContent = `Phase: ${phaseLabel(currentState.phase)}`;
   roundBadge.textContent = `Round ${currentState.round}`;
   currentRound.textContent = String(currentState.round);
 }
 
 function applyServerState(state: ExplorerState): void {
+  currentState.id = state.id;
   currentState.round = state.round;
   currentState.phase = state.phase;
   currentState.variants = state.variants;
@@ -321,6 +456,20 @@ function pickHighestRatedVariant(): string | null {
 function showGallery(): void {
   startScreen.classList.add('hidden');
   galleryScreen.classList.remove('hidden');
+}
+
+function showStart(): void {
+  closeVariantModal();
+  galleryScreen.classList.add('hidden');
+  startScreen.classList.remove('hidden');
+}
+
+function hideClarification(): void {
+  clarificationPanel.classList.add('hidden');
+  clarificationQuestions.innerHTML = '';
+  currentClarification = null;
+  pendingDescription = '';
+  loadExplorations().catch(showError);
 }
 
 function showLoading(): void {
@@ -349,6 +498,153 @@ function readErrorMessage(payload: unknown): string | null {
   }
 
   return null;
+}
+
+function renderQuestionInput(question: ClarificationQuestion): string {
+  if (question.type === 'single_select') {
+    return `
+      <select data-question-input="${escapeHtml(question.id)}">
+        <option value="">请选择</option>
+        ${(question.options ?? []).map((option) => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`).join('')}
+      </select>
+      ${renderOtherInput(question)}
+    `;
+  }
+
+  if (question.type === 'multi_select') {
+    return `
+      <div class="clarification-options" data-question-input="${escapeHtml(question.id)}">
+        ${(question.options ?? []).map((option) => `
+          <label class="clarification-option">
+            <input type="checkbox" value="${escapeHtml(option)}">
+            <span>${escapeHtml(option)}</span>
+          </label>
+        `).join('')}
+      </div>
+      ${renderOtherInput(question)}
+    `;
+  }
+
+  const defaultValue = typeof question.defaultValue === 'string' ? question.defaultValue : '';
+  return `<input data-question-input="${escapeHtml(question.id)}" type="text" value="${escapeHtml(defaultValue)}" placeholder="请输入">`;
+}
+
+function renderOtherInput(question: ClarificationQuestion): string {
+  if (!question.allowOther) {
+    return '';
+  }
+
+  return `<input data-question-other="${escapeHtml(question.id)}" type="text" placeholder="其他补充，可留空">`;
+}
+
+function collectClarificationAnswers(payload: ClarificationPayload): Record<string, string | string[]> | null {
+  const answers: Record<string, string | string[]> = {};
+
+  for (const question of payload.questions) {
+    const answer = readQuestionAnswer(question);
+    const isEmpty = Array.isArray(answer) ? answer.length === 0 : answer.trim().length === 0;
+
+    if (question.required && isEmpty) {
+      alert(`请回答：${question.label}`);
+      return null;
+    }
+
+    if (!isEmpty) {
+      answers[question.id] = answer;
+    }
+  }
+
+  return answers;
+}
+
+function readQuestionAnswer(question: ClarificationQuestion): string | string[] {
+  const selector = `[data-question-input="${cssEscape(question.id)}"]`;
+  const element = clarificationQuestions.querySelector<HTMLElement>(selector);
+
+  if (!element) {
+    return question.type === 'multi_select' ? [] : '';
+  }
+
+  if (question.type === 'multi_select') {
+    const values = Array.from(element.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')).map((input) => input.value);
+    const other = readOtherAnswer(question.id);
+    return other ? [...values, `Other: ${other}`] : values;
+  }
+
+  const value = (element as HTMLInputElement | HTMLSelectElement).value.trim();
+  const other = readOtherAnswer(question.id);
+  return other ? [value, `Other: ${other}`].filter(Boolean).join(', ') : value;
+}
+
+function readOtherAnswer(questionId: string): string {
+  return clarificationQuestions.querySelector<HTMLInputElement>(`[data-question-other="${cssEscape(questionId)}"]`)?.value.trim() ?? '';
+}
+
+function buildClarifiedDescription(
+  description: string,
+  payload: ClarificationPayload,
+  answers: Record<string, string | string[]>,
+): string {
+  const lines = Object.entries(answers).map(([id, value]) => {
+    const question = payload.questions.find((item) => item.id === id);
+    const label = question?.label ?? id;
+    const text = Array.isArray(value) ? value.join(', ') : value;
+    return `- ${label}: ${text}`;
+  });
+
+  return [
+    description,
+    '',
+    'Clarification answers:',
+    ...lines,
+    '',
+    'Assumptions:',
+    ...payload.assumptions.map((assumption) => `- ${assumption}`),
+  ].join('\n');
+}
+
+function cssEscape(value: string): string {
+  if (typeof CSS !== 'undefined' && CSS.escape) {
+    return CSS.escape(value);
+  }
+
+  return value.replace(/["\\]/g, '\\$&');
+}
+
+function phaseLabel(phase: Phase): string {
+  const phaseText: Record<Phase, string> = {
+    explore: '探索',
+    converge: '对战',
+    finalized: '已定稿',
+  };
+
+  return phaseText[phase];
+}
+
+function formatDate(timestamp: number): string {
+  if (!timestamp) {
+    return '未知时间';
+  }
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(timestamp));
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => {
+    const map: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    };
+    return map[char];
+  });
 }
 
 function query<T extends HTMLElement>(id: string): T {
