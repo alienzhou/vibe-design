@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -14,7 +14,7 @@ import {
   upsertScore,
   writeState,
 } from './explorer.js';
-import { FallbackVariantGenerator, MockVariantGenerator, type VariantGenerator } from './generator.js';
+import { ClaudeCliGenerator, FallbackVariantGenerator, MockVariantGenerator, type VariantGenerator } from './generator.js';
 import { buildVariantPromptPlans } from './prompt-planner.js';
 import type { GenerationRequest, GenerationResult, Score } from './types.js';
 
@@ -170,6 +170,34 @@ describe('explorer workflow', () => {
       expect(listVariants(workspace, 1)).toHaveLength(6);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('using mock generator'));
       expect(readFileSync(join(workspace, 'round-1', 'generation.log'), 'utf-8')).toContain('Primary generation failed');
+    } finally {
+      warn.mockRestore();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back per variant when Claude exits without writing the expected file', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'design-explorer-'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const command = join(workspace, 'noop-claude.sh');
+      writeFileSync(command, '#!/bin/sh\necho "no file written"\nexit 0\n');
+      chmodSync(command, 0o755);
+
+      const outputDir = join(workspace, 'round-1');
+      const generator = new ClaudeCliGenerator(command, 1_000, 2, 'acceptEdits', true);
+      await generator.generate({
+        description: 'Dashboard',
+        round: 1,
+        phase: 'explore',
+        outputDir,
+        previousScores: [],
+      });
+
+      expect(listVariants(workspace, 1)).toHaveLength(6);
+      expect(readFileSync(join(outputDir, 'generation.log'), 'utf-8')).toContain('did not create variant-1.html');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('writing fallback file'));
     } finally {
       warn.mockRestore();
       rmSync(workspace, { recursive: true, force: true });

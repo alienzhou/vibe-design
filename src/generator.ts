@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { ensureDir, variantCountForPhase } from './explorer.js';
@@ -12,10 +12,11 @@ export interface VariantGenerator {
 
 export class ClaudeCliGenerator implements VariantGenerator {
   constructor(
-    private readonly command = process.env.CLAUDE_CODE_COMMAND ?? 'claude',
-    private readonly timeoutMs = readPositiveInteger(process.env.CLAUDE_CODE_TIMEOUT_MS, 1_800_000),
-    private readonly parallelism = readPositiveInteger(process.env.CLAUDE_CODE_PARALLELISM, 3),
-    private readonly permissionMode = process.env.CLAUDE_CODE_PERMISSION_MODE ?? 'acceptEdits',
+    private readonly command: string = process.env.CLAUDE_CODE_COMMAND ?? 'claude',
+    private readonly timeoutMs: number = readPositiveInteger(process.env.CLAUDE_CODE_TIMEOUT_MS, 1_800_000),
+    private readonly parallelism: number = readPositiveInteger(process.env.CLAUDE_CODE_PARALLELISM, 3),
+    private readonly permissionMode: string = process.env.CLAUDE_CODE_PERMISSION_MODE ?? 'acceptEdits',
+    private readonly fallbackFailedVariants: boolean = false,
   ) {}
 
   async generate(request: GenerationRequest): Promise<GenerationResult> {
@@ -35,8 +36,20 @@ export class ClaudeCliGenerator implements VariantGenerator {
     ].join('\n'));
     console.info(`[Design Explorer] Claude Code parallel generation started. outputDir=${request.outputDir} variants=${plans.length} parallelism=${this.parallelism} permissionMode=${this.permissionMode}`);
 
-    const results = await runWithConcurrency(plans, this.parallelism, (plan) => this.generateSingleVariant(request, plan));
+    const results = await runWithConcurrency(plans, this.parallelism, (plan) => this.generateSingleVariantOrFallback(request, plan));
     return { output: results.join('\n') };
+  }
+
+  private async generateSingleVariantOrFallback(request: GenerationRequest, plan: VariantPromptPlan): Promise<string> {
+    try {
+      return await this.generateSingleVariant(request, plan);
+    } catch (error) {
+      if (!this.fallbackFailedVariants) {
+        throw error;
+      }
+
+      return this.writeFallbackVariant(request, plan, error);
+    }
   }
 
   private async generateSingleVariant(request: GenerationRequest, plan: VariantPromptPlan): Promise<string> {
@@ -130,9 +143,30 @@ export class ClaudeCliGenerator implements VariantGenerator {
           return;
         }
 
+        if (!existsSync(join(request.outputDir, plan.outputFile))) {
+          reject(new Error(`Claude Code exited successfully but did not create ${plan.outputFile}.`));
+          return;
+        }
+
         resolve(stdout);
       });
     });
+  }
+
+  private writeFallbackVariant(request: GenerationRequest, plan: VariantPromptPlan, error: unknown): string {
+    const message = `Variant generation failed, writing fallback file. variantId=${plan.variantId} reason=${formatError(error)}`;
+    writeGenerationLog(request.outputDir, message, 'warn');
+    console.warn(`[Design Explorer] ${message}`);
+
+    const html = renderMockHtml(
+      `${request.description}\n\nFallback for ${plan.title}: ${plan.hypothesis}`,
+      plan.title,
+      '#111827',
+      '#f8fafc',
+      '#8b5cf6',
+    );
+    writeFileSync(join(request.outputDir, plan.outputFile), html);
+    return message;
   }
 }
 
@@ -190,7 +224,10 @@ export function createGenerator(): VariantGenerator {
     return new ClaudeCliGenerator();
   }
 
-  return new FallbackVariantGenerator(new ClaudeCliGenerator(), new MockVariantGenerator());
+  return new FallbackVariantGenerator(
+    new ClaudeCliGenerator(undefined, undefined, undefined, undefined, true),
+    new MockVariantGenerator(),
+  );
 }
 
 function renderMockHtml(description: string, name: string, background: string, text: string, accent: string): string {
