@@ -52,6 +52,7 @@ interface ClarificationQuestion {
   type: ClarificationQuestionType;
   required: boolean;
   options?: string[];
+  allowOther?: boolean;
   defaultValue?: string | string[];
 }
 
@@ -86,6 +87,7 @@ const explorationsList = query<HTMLElement>('explorations-list');
 const descriptionInput = query<HTMLInputElement>('description-input');
 const startBtn = query<HTMLButtonElement>('start-btn');
 const submitClarificationBtn = query<HTMLButtonElement>('submit-clarification-btn');
+const skipClarificationBtn = query<HTMLButtonElement>('skip-clarification-btn');
 const cancelClarificationBtn = query<HTMLButtonElement>('cancel-clarification-btn');
 const backToStartBtn = query<HTMLButtonElement>('back-to-start-btn');
 const nextRoundBtn = query<HTMLButtonElement>('next-round-btn');
@@ -114,6 +116,10 @@ startBtn.addEventListener('click', () => {
 
 submitClarificationBtn.addEventListener('click', () => {
   startExploration().catch(showError);
+});
+
+skipClarificationBtn.addEventListener('click', () => {
+  startExploration(true).catch(showError);
 });
 
 cancelClarificationBtn.addEventListener('click', () => {
@@ -181,7 +187,7 @@ async function prepareClarification(): Promise<void> {
   showLoading();
 
   try {
-    const data = await requestJson<{ payload: ClarificationPayload }>('/api/clarify', {
+    const data = await requestJson<{ payload: ClarificationPayload; source: 'claude' | 'fallback' }>('/api/clarify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ description }),
@@ -193,13 +199,13 @@ async function prepareClarification(): Promise<void> {
   }
 }
 
-async function startExploration(): Promise<void> {
+async function startExploration(skipClarification = false): Promise<void> {
   if (!currentClarification) {
     await prepareClarification();
     return;
   }
 
-  const answers = collectClarificationAnswers(currentClarification);
+  const answers = skipClarification ? {} : collectClarificationAnswers(currentClarification);
   if (!answers) {
     return;
   }
@@ -501,6 +507,7 @@ function renderQuestionInput(question: ClarificationQuestion): string {
         <option value="">请选择</option>
         ${(question.options ?? []).map((option) => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`).join('')}
       </select>
+      ${renderOtherInput(question)}
     `;
   }
 
@@ -514,11 +521,20 @@ function renderQuestionInput(question: ClarificationQuestion): string {
           </label>
         `).join('')}
       </div>
+      ${renderOtherInput(question)}
     `;
   }
 
   const defaultValue = typeof question.defaultValue === 'string' ? question.defaultValue : '';
   return `<input data-question-input="${escapeHtml(question.id)}" type="text" value="${escapeHtml(defaultValue)}" placeholder="请输入">`;
+}
+
+function renderOtherInput(question: ClarificationQuestion): string {
+  if (!question.allowOther) {
+    return '';
+  }
+
+  return `<input data-question-other="${escapeHtml(question.id)}" type="text" placeholder="其他补充，可留空">`;
 }
 
 function collectClarificationAnswers(payload: ClarificationPayload): Record<string, string | string[]> | null {
@@ -550,10 +566,18 @@ function readQuestionAnswer(question: ClarificationQuestion): string | string[] 
   }
 
   if (question.type === 'multi_select') {
-    return Array.from(element.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')).map((input) => input.value);
+    const values = Array.from(element.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')).map((input) => input.value);
+    const other = readOtherAnswer(question.id);
+    return other ? [...values, `Other: ${other}`] : values;
   }
 
-  return (element as HTMLInputElement | HTMLSelectElement).value.trim();
+  const value = (element as HTMLInputElement | HTMLSelectElement).value.trim();
+  const other = readOtherAnswer(question.id);
+  return other ? [value, `Other: ${other}`].filter(Boolean).join(', ') : value;
+}
+
+function readOtherAnswer(questionId: string): string {
+  return clarificationQuestions.querySelector<HTMLInputElement>(`[data-question-other="${cssEscape(questionId)}"]`)?.value.trim() ?? '';
 }
 
 function buildClarifiedDescription(

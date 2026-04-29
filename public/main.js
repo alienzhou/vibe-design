@@ -23,6 +23,7 @@
   var descriptionInput = query("description-input");
   var startBtn = query("start-btn");
   var submitClarificationBtn = query("submit-clarification-btn");
+  var skipClarificationBtn = query("skip-clarification-btn");
   var cancelClarificationBtn = query("cancel-clarification-btn");
   var backToStartBtn = query("back-to-start-btn");
   var nextRoundBtn = query("next-round-btn");
@@ -48,6 +49,9 @@
   });
   submitClarificationBtn.addEventListener("click", () => {
     startExploration().catch(showError);
+  });
+  skipClarificationBtn.addEventListener("click", () => {
+    startExploration(true).catch(showError);
   });
   cancelClarificationBtn.addEventListener("click", () => {
     hideClarification();
@@ -110,12 +114,12 @@
       hideLoading();
     }
   }
-  async function startExploration() {
+  async function startExploration(skipClarification = false) {
     if (!currentClarification) {
       await prepareClarification();
       return;
     }
-    const answers = collectClarificationAnswers(currentClarification);
+    const answers = skipClarification ? {} : collectClarificationAnswers(currentClarification);
     if (!answers) {
       return;
     }
@@ -364,6 +368,7 @@
         <option value="">\u8BF7\u9009\u62E9</option>
         ${(question.options ?? []).map((option) => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`).join("")}
       </select>
+      ${renderOtherInput(question)}
     `;
     }
     if (question.type === "multi_select") {
@@ -376,10 +381,17 @@
           </label>
         `).join("")}
       </div>
+      ${renderOtherInput(question)}
     `;
     }
     const defaultValue = typeof question.defaultValue === "string" ? question.defaultValue : "";
     return `<input data-question-input="${escapeHtml(question.id)}" type="text" value="${escapeHtml(defaultValue)}" placeholder="\u8BF7\u8F93\u5165">`;
+  }
+  function renderOtherInput(question) {
+    if (!question.allowOther) {
+      return "";
+    }
+    return `<input data-question-other="${escapeHtml(question.id)}" type="text" placeholder="\u5176\u4ED6\u8865\u5145\uFF0C\u53EF\u7559\u7A7A">`;
   }
   function collectClarificationAnswers(payload) {
     const answers = {};
@@ -403,9 +415,16 @@
       return question.type === "multi_select" ? [] : "";
     }
     if (question.type === "multi_select") {
-      return Array.from(element.querySelectorAll('input[type="checkbox"]:checked')).map((input) => input.value);
+      const values = Array.from(element.querySelectorAll('input[type="checkbox"]:checked')).map((input) => input.value);
+      const other2 = readOtherAnswer(question.id);
+      return other2 ? [...values, `Other: ${other2}`] : values;
     }
-    return element.value.trim();
+    const value = element.value.trim();
+    const other = readOtherAnswer(question.id);
+    return other ? [value, `Other: ${other}`].filter(Boolean).join(", ") : value;
+  }
+  function readOtherAnswer(questionId) {
+    return clarificationQuestions.querySelector(`[data-question-other="${cssEscape(questionId)}"]`)?.value.trim() ?? "";
   }
   function buildClarifiedDescription(description, payload, answers) {
     const lines = Object.entries(answers).map(([id, value]) => {

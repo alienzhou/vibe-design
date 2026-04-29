@@ -14,7 +14,7 @@ import {
   upsertScore,
   writeState,
 } from './explorer.js';
-import { ClaudeCliGenerator, FallbackVariantGenerator, MockVariantGenerator, type VariantGenerator } from './generator.js';
+import { buildClaudeCliArgs, ClaudeCliGenerator, FallbackVariantGenerator, MockVariantGenerator, type VariantGenerator } from './generator.js';
 import { buildVariantPromptPlans } from './prompt-planner.js';
 import type { GenerationRequest, GenerationResult, Score } from './types.js';
 
@@ -69,6 +69,25 @@ describe('explorer workflow', () => {
     expect(plans[0].prompt).toContain('ASCII/page-map sections');
   });
 
+  it('allows non-interactive Claude file creation commands', () => {
+    const args = buildClaudeCliArgs('Generate variant', 'acceptEdits', [
+      'Write',
+      'Bash(mkdir *)',
+      'Bash(touch *)',
+    ]);
+
+    expect(args).toEqual([
+      '--permission-mode',
+      'acceptEdits',
+      '--allowedTools',
+      'Write',
+      'Bash(mkdir *)',
+      'Bash(touch *)',
+      '-p',
+      'Generate variant',
+    ]);
+  });
+
   it('parses tagged clarification questions into frontend-safe JSON', () => {
     const payload = parseClarificationPayload(`
       <${CLARIFICATION_TAG}>
@@ -82,7 +101,8 @@ describe('explorer workflow', () => {
             "why": "Reader changes hierarchy.",
             "type": "single_select",
             "required": true,
-            "options": ["manager", "engineer"]
+            "options": ["manager", "engineer"],
+            "allowOther": true
           }
         ],
         "assumptions": ["Use sketch-first candidates."]
@@ -93,7 +113,9 @@ describe('explorer workflow', () => {
     expect(payload.questions[0]).toMatchObject({
       id: 'target_reader',
       type: 'single_select',
+      required: false,
       options: ['manager', 'engineer'],
+      allowOther: true,
     });
   });
 

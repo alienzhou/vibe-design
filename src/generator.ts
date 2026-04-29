@@ -10,6 +10,22 @@ export interface VariantGenerator {
   generate(request: GenerationRequest): Promise<GenerationResult>;
 }
 
+export const DEFAULT_CLAUDE_CODE_ALLOWED_TOOLS = [
+  'Write',
+  'Edit',
+  'MultiEdit',
+  'Read',
+  'Bash(pwd)',
+  'Bash(ls *)',
+  'Bash(test *)',
+  'Bash(mkdir *)',
+  'Bash(touch *)',
+  'Bash(cat *)',
+  'Bash(tee *)',
+  'Bash(printf *)',
+  'Bash(echo *)',
+];
+
 export class ClaudeCliGenerator implements VariantGenerator {
   constructor(
     private readonly command: string = process.env.CLAUDE_CODE_COMMAND ?? 'claude',
@@ -17,6 +33,7 @@ export class ClaudeCliGenerator implements VariantGenerator {
     private readonly parallelism: number = readPositiveInteger(process.env.CLAUDE_CODE_PARALLELISM, 3),
     private readonly permissionMode: string = process.env.CLAUDE_CODE_PERMISSION_MODE ?? 'acceptEdits',
     private readonly fallbackFailedVariants: boolean = false,
+    private readonly allowedTools: string[] = readAllowedTools(process.env.CLAUDE_CODE_ALLOWED_TOOLS),
   ) {}
 
   async generate(request: GenerationRequest): Promise<GenerationResult> {
@@ -32,9 +49,10 @@ export class ClaudeCliGenerator implements VariantGenerator {
       `variantCount=${plans.length}`,
       `parallelism=${this.parallelism}`,
       `permissionMode=${this.permissionMode}`,
+      `allowedTools=${this.allowedTools.join(', ')}`,
       `timeoutMs=${this.timeoutMs}`,
     ].join('\n'));
-    console.info(`[Design Explorer] Claude Code parallel generation started. outputDir=${request.outputDir} variants=${plans.length} parallelism=${this.parallelism} permissionMode=${this.permissionMode}`);
+    console.info(`[Design Explorer] Claude Code parallel generation started. outputDir=${request.outputDir} variants=${plans.length} parallelism=${this.parallelism} permissionMode=${this.permissionMode} allowedTools=${this.allowedTools.join(',')}`);
 
     const results = await runWithConcurrency(plans, this.parallelism, (plan) => this.generateSingleVariantOrFallback(request, plan));
     return { output: results.join('\n') };
@@ -67,8 +85,8 @@ export class ClaudeCliGenerator implements VariantGenerator {
     return new Promise((resolve, reject) => {
       let child: ChildProcessByStdio<null, Readable, Readable>;
       try {
-        const args = ['--permission-mode', this.permissionMode, '-p', plan.prompt];
-        writeGenerationLog(request.outputDir, `Claude Code spawn args. variantId=${plan.variantId} args=--permission-mode ${this.permissionMode} -p <prompt>`);
+        const args = buildClaudeCliArgs(plan.prompt, this.permissionMode, this.allowedTools);
+        writeGenerationLog(request.outputDir, `Claude Code spawn args. variantId=${plan.variantId} args=${formatClaudeArgsForLog(args)}`);
         child = spawn(this.command, args, {
           cwd: request.outputDir,
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -230,6 +248,16 @@ export function createGenerator(): VariantGenerator {
   );
 }
 
+export function buildClaudeCliArgs(prompt: string, permissionMode: string, allowedTools: string[]): string[] {
+  const args = ['--permission-mode', permissionMode];
+  if (allowedTools.length > 0) {
+    args.push('--allowedTools', ...allowedTools);
+  }
+
+  args.push('-p', prompt);
+  return args;
+}
+
 function renderMockHtml(description: string, name: string, background: string, text: string, accent: string): string {
   return `<!DOCTYPE html>
 <html lang="zh">
@@ -339,6 +367,21 @@ function formatError(error: unknown): string {
 function readPositiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readAllowedTools(value: string | undefined): string[] {
+  if (!value) {
+    return DEFAULT_CLAUDE_CODE_ALLOWED_TOOLS;
+  }
+
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function formatClaudeArgsForLog(args: string[]): string {
+  return args.map((arg) => (arg === args.at(-1) ? '<prompt>' : arg)).join(' ');
 }
 
 export function writeGenerationLog(outputDir: string, message: string, level: 'info' | 'warn' | 'error' = 'info'): void {

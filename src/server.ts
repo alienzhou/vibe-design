@@ -2,7 +2,7 @@ import express, { type Request, type Response } from 'express';
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { buildClarificationPrompt, createDefaultClarificationPayload } from './clarification.js';
+import { buildClarificationPrompt, generateClarificationPayload } from './clarification.js';
 import {
   assertRating,
   assertVariantId,
@@ -19,7 +19,7 @@ import {
   writeCurrentExplorationId,
   writeState,
 } from './explorer.js';
-import { createGenerator, type VariantGenerator } from './generator.js';
+import { createGenerator, DEFAULT_CLAUDE_CODE_ALLOWED_TOOLS, type VariantGenerator } from './generator.js';
 import type { ExplorerState, Score } from './types.js';
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -89,12 +89,14 @@ export function createApp(options: CreateAppOptions = {}) {
     }
   });
 
-  app.post('/api/clarify', (req, res) => {
+  app.post('/api/clarify', async (req, res) => {
     try {
       const description = readDescription(req);
+      const previousExplorations = listExplorations(workspaceDir).map((summary) => summary.description);
+      const clarification = await generateClarificationPayload(description, previousExplorations);
       res.json({
-        prompt: buildClarificationPrompt(description),
-        payload: createDefaultClarificationPayload(description),
+        prompt: buildClarificationPrompt(description, previousExplorations),
+        ...clarification,
       });
     } catch (error) {
       sendError(res, error);
@@ -321,5 +323,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log(`Claude timeout: ${process.env.CLAUDE_CODE_TIMEOUT_MS ?? '1800000'}ms`);
     console.log(`Claude parallelism: ${process.env.CLAUDE_CODE_PARALLELISM ?? '3'}`);
     console.log(`Claude permission mode: ${process.env.CLAUDE_CODE_PERMISSION_MODE ?? 'acceptEdits'}`);
+    console.log(`Claude allowed tools: ${process.env.CLAUDE_CODE_ALLOWED_TOOLS ?? DEFAULT_CLAUDE_CODE_ALLOWED_TOOLS.join(', ')}`);
   });
 }

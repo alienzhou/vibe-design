@@ -11,6 +11,7 @@ export interface ClarificationQuestion {
   type: ClarificationQuestionType;
   required: boolean;
   options?: string[];
+  allowOther?: boolean;
   defaultValue?: string | string[];
 }
 

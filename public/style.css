@@ -159,6 +159,10 @@ body {
   font-size: 14px;
 }
 
+.clarification-question [data-question-other] {
+  margin-top: 10px;
+}
+
 .clarification-options {
   display: flex;
   flex-wrap: wrap;
