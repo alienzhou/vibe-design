@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design Explorer - 设计变体探索</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <h1>Design Explorer</h1>
+      <div class="phase-indicator">
+        <span id="phase-badge" class="phase-badge">Phase: 探索</span>
+        <span id="round-badge" class="round-badge">Round 0</span>
+      </div>
+    </header>
+
+    <!-- Start Screen -->
+    <div id="start-screen" class="start-screen">
+      <div class="start-content">
+        <h2>探索你的设计风格</h2>
+        <p>描述你想要的设计，AI 将生成多种风格变体，通过打分和选择，逐步收敛到你喜欢的视觉风格。</p>
+        <div class="input-group">
+          <input
+            type="text"
+            id="description-input"
+            placeholder="例如：SaaS 定价页面，清新现代风格..."
+          />
+          <button id="start-btn" class="btn-primary">开始探索</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Gallery Screen -->
+    <div id="gallery-screen" class="gallery-screen hidden">
+      <div class="gallery-header">
+        <h3>第 <span id="current-round">1</span> 轮设计变体</h3>
+        <p class="hint">点击任意卡片查看详情并评分，0-5 星表示你的喜好程度</p>
+      </div>
+
+      <div id="variants-grid" class="variants-grid">
+        <!-- Variants will be rendered here -->
+      </div>
+
+      <div class="actions-bar">
+        <button id="next-round-btn" class="btn-primary" disabled>
+          下一轮探索 →
+        </button>
+        <button id="finalize-btn" class="btn-secondary hidden">
+          定稿导出
+        </button>
+      </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+      <div class="loading-content">
+        <div class="spinner"></div>
+        <h3>正在生成设计变体...</h3>
+        <p class="loading-hint">AI 正在为你创造多种风格可能</p>
+      </div>
+    </div>
+
+    <!-- Modal for variant detail -->
+    <div id="modal-overlay" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>设计预览</h3>
+          <button id="close-modal" class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="preview-frame-container">
+            <iframe id="preview-frame"></iframe>
+          </div>
+          <div class="rating-section">
+            <p>请为这个设计打分：</p>
+            <div id="star-rating" class="star-rating">
+              <button class="star">★</button>
+              <button class="star">★</button>
+              <button class="star">★</button>
+              <button class="star">★</button>
+              <button class="star">★</button>
+            </div>
+            <p id="rating-label" class="rating-label"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>
