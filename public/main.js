@@ -33,16 +33,16 @@
   var currentRound = query("current-round");
   var variantsGrid = query("variants-grid");
   var previewFrame = query("preview-frame");
-  var starRating = query("star-rating");
+  var preferenceRating = query("preference-rating");
   var ratingLabel = query("rating-label");
   var closeModal = query("close-modal");
   var ratingLabels = {
-    0: "\u672A\u8BC4\u5206",
-    1: "\u4E0D\u559C\u6B22",
-    2: "\u4E0D\u592A\u559C\u6B22",
-    3: "\u4E00\u822C",
-    4: "\u559C\u6B22",
-    5: "\u975E\u5E38\u559C\u6B22"
+    0: "\u672A\u53CD\u9988",
+    1: "\u7279\u522B\u8BA8\u538C",
+    2: "\u4E0D\u91C7\u7EB3",
+    3: "\u6682\u4E0D\u786E\u5B9A",
+    4: "\u91C7\u7EB3",
+    5: "\u7279\u522B\u559C\u6B22"
   };
   startBtn.addEventListener("click", () => {
     prepareClarification().catch(showError);
@@ -68,20 +68,11 @@
     finalizeDesign().catch(showError);
   });
   closeModal.addEventListener("click", closeVariantModal);
-  starRating.querySelectorAll(".star").forEach((star, index) => {
-    const rating = index + 1;
-    star.addEventListener("click", () => {
+  preferenceRating.querySelectorAll(".preference-option").forEach((option) => {
+    const rating = Number(option.dataset.rating);
+    option.addEventListener("click", () => {
       saveScore(rating).catch(showError);
     });
-    star.addEventListener("mouseenter", () => {
-      updateStarDisplay(rating, true);
-    });
-  });
-  starRating.addEventListener("mouseleave", () => {
-    if (!currentModalVariant) {
-      return;
-    }
-    updateStarDisplay(currentState.scores[currentModalVariant.id] ?? 0);
   });
   modalOverlay.addEventListener("click", (event) => {
     if (event.target === modalOverlay) {
@@ -161,7 +152,7 @@
       return;
     }
     currentState.scores[currentModalVariant.id] = rating;
-    updateStarDisplay(rating);
+    updatePreferenceDisplay(rating);
     updateVariantCardRating(currentModalVariant.id, rating);
     updateActionButtons();
     await requestJson("/api/score", {
@@ -257,7 +248,7 @@
       <div class="variant-info">
         <div class="variant-title">\u53D8\u4F53 ${index + 1}</div>
         <div class="variant-rating" data-rating="${rating}">
-          ${renderStars(rating)}
+          ${renderPreferenceBadge(rating)}
         </div>
       </div>
     `;
@@ -265,15 +256,13 @@
       variantsGrid.appendChild(card);
     });
   }
-  function renderStars(rating) {
-    return Array.from(
-      { length: 5 },
-      (_, index) => `<span class="star ${index < rating ? "active" : ""}">\u2605</span>`
-    ).join("");
+  function renderPreferenceBadge(rating) {
+    const tone = rating >= 4 ? "accept" : rating > 0 ? "reject" : "empty";
+    return `<span class="preference-badge ${tone}">${escapeHtml(ratingLabels[rating])}</span>`;
   }
   function openVariantModal(variant) {
     currentModalVariant = variant;
-    updateStarDisplay(currentState.scores[variant.id] ?? 0);
+    updatePreferenceDisplay(currentState.scores[variant.id] ?? 0);
     previewFrame.removeAttribute("srcdoc");
     previewFrame.src = `${variant.path}?v=${variant.round}`;
     modalOverlay.classList.remove("hidden");
@@ -283,18 +272,18 @@
     currentModalVariant = null;
     previewFrame.removeAttribute("src");
   }
-  function updateStarDisplay(rating, isHover = false) {
-    starRating.querySelectorAll(".star").forEach((star, index) => {
-      star.classList.toggle("active", index < rating);
+  function updatePreferenceDisplay(rating) {
+    preferenceRating.querySelectorAll(".preference-option").forEach((option) => {
+      option.classList.toggle("active", Number(option.dataset.rating) === rating);
     });
     ratingLabel.textContent = ratingLabels[rating];
-    ratingLabel.style.color = isHover ? "#fbbf24" : "#fff";
+    ratingLabel.dataset.intent = rating >= 4 ? "accept" : rating > 0 ? "reject" : "empty";
   }
   function updateVariantCardRating(variantId, rating) {
     const card = document.querySelector(`[data-id="${variantId}"]`);
     const ratingContainer = card?.querySelector(".variant-rating");
     if (ratingContainer) {
-      ratingContainer.innerHTML = renderStars(rating);
+      ratingContainer.innerHTML = renderPreferenceBadge(rating);
     }
   }
   function updateActionButtons() {

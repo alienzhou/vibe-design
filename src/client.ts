@@ -97,17 +97,17 @@ const roundBadge = query<HTMLElement>('round-badge');
 const currentRound = query<HTMLElement>('current-round');
 const variantsGrid = query<HTMLElement>('variants-grid');
 const previewFrame = query<HTMLIFrameElement>('preview-frame');
-const starRating = query<HTMLElement>('star-rating');
+const preferenceRating = query<HTMLElement>('preference-rating');
 const ratingLabel = query<HTMLElement>('rating-label');
 const closeModal = query<HTMLButtonElement>('close-modal');
 
 const ratingLabels: Record<Rating, string> = {
-  0: '未评分',
-  1: '不喜欢',
-  2: '不太喜欢',
-  3: '一般',
-  4: '喜欢',
-  5: '非常喜欢',
+  0: '未反馈',
+  1: '特别讨厌',
+  2: '不采纳',
+  3: '暂不确定',
+  4: '采纳',
+  5: '特别喜欢',
 };
 
 startBtn.addEventListener('click', () => {
@@ -142,24 +142,12 @@ finalizeBtn.addEventListener('click', () => {
 
 closeModal.addEventListener('click', closeVariantModal);
 
-starRating.querySelectorAll<HTMLButtonElement>('.star').forEach((star, index) => {
-  const rating = (index + 1) as Rating;
+preferenceRating.querySelectorAll<HTMLButtonElement>('.preference-option').forEach((option) => {
+  const rating = Number(option.dataset.rating) as Rating;
 
-  star.addEventListener('click', () => {
+  option.addEventListener('click', () => {
     saveScore(rating).catch(showError);
   });
-
-  star.addEventListener('mouseenter', () => {
-    updateStarDisplay(rating, true);
-  });
-});
-
-starRating.addEventListener('mouseleave', () => {
-  if (!currentModalVariant) {
-    return;
-  }
-
-  updateStarDisplay(currentState.scores[currentModalVariant.id] ?? 0);
 });
 
 modalOverlay.addEventListener('click', (event) => {
@@ -255,7 +243,7 @@ async function saveScore(rating: Rating): Promise<void> {
   }
 
   currentState.scores[currentModalVariant.id] = rating;
-  updateStarDisplay(rating);
+  updatePreferenceDisplay(rating);
   updateVariantCardRating(currentModalVariant.id, rating);
   updateActionButtons();
 
@@ -369,7 +357,7 @@ function renderVariants(): void {
       <div class="variant-info">
         <div class="variant-title">变体 ${index + 1}</div>
         <div class="variant-rating" data-rating="${rating}">
-          ${renderStars(rating)}
+          ${renderPreferenceBadge(rating)}
         </div>
       </div>
     `;
@@ -379,15 +367,14 @@ function renderVariants(): void {
   });
 }
 
-function renderStars(rating: Rating): string {
-  return Array.from({ length: 5 }, (_, index) =>
-    `<span class="star ${index < rating ? 'active' : ''}">★</span>`,
-  ).join('');
+function renderPreferenceBadge(rating: Rating): string {
+  const tone = rating >= 4 ? 'accept' : rating > 0 ? 'reject' : 'empty';
+  return `<span class="preference-badge ${tone}">${escapeHtml(ratingLabels[rating])}</span>`;
 }
 
 function openVariantModal(variant: Variant): void {
   currentModalVariant = variant;
-  updateStarDisplay(currentState.scores[variant.id] ?? 0);
+  updatePreferenceDisplay(currentState.scores[variant.id] ?? 0);
   previewFrame.removeAttribute('srcdoc');
   previewFrame.src = `${variant.path}?v=${variant.round}`;
   modalOverlay.classList.remove('hidden');
@@ -399,13 +386,13 @@ function closeVariantModal(): void {
   previewFrame.removeAttribute('src');
 }
 
-function updateStarDisplay(rating: Rating, isHover = false): void {
-  starRating.querySelectorAll<HTMLElement>('.star').forEach((star, index) => {
-    star.classList.toggle('active', index < rating);
+function updatePreferenceDisplay(rating: Rating): void {
+  preferenceRating.querySelectorAll<HTMLButtonElement>('.preference-option').forEach((option) => {
+    option.classList.toggle('active', Number(option.dataset.rating) === rating);
   });
 
   ratingLabel.textContent = ratingLabels[rating];
-  ratingLabel.style.color = isHover ? '#fbbf24' : '#fff';
+  ratingLabel.dataset.intent = rating >= 4 ? 'accept' : rating > 0 ? 'reject' : 'empty';
 }
 
 function updateVariantCardRating(variantId: string, rating: Rating): void {
@@ -413,7 +400,7 @@ function updateVariantCardRating(variantId: string, rating: Rating): void {
   const ratingContainer = card?.querySelector<HTMLElement>('.variant-rating');
 
   if (ratingContainer) {
-    ratingContainer.innerHTML = renderStars(rating);
+    ratingContainer.innerHTML = renderPreferenceBadge(rating);
   }
 }
 

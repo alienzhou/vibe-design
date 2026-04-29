@@ -88,22 +88,33 @@
       <div class="modal">
         <div class="modal-header">
           <h3>设计预览</h3>
+          <div class="rating-section" aria-label="偏好反馈">
+            <span class="rating-section-title">偏好反馈</span>
+            <div id="preference-rating" class="preference-rating">
+              <button class="preference-option preference-accept-strong" data-rating="5" type="button">
+                <span class="preference-icon">😄</span>
+                <span class="preference-text">特别喜欢</span>
+              </button>
+              <button class="preference-option preference-accept" data-rating="4" type="button">
+                <span class="preference-icon">🙂</span>
+                <span class="preference-text">采纳</span>
+              </button>
+              <button class="preference-option preference-reject" data-rating="2" type="button">
+                <span class="preference-icon">🙁</span>
+                <span class="preference-text">不采纳</span>
+              </button>
+              <button class="preference-option preference-reject-strong" data-rating="1" type="button">
+                <span class="preference-icon">😫</span>
+                <span class="preference-text">特别讨厌</span>
+              </button>
+            </div>
+            <span id="rating-label" class="rating-label">未反馈</span>
+          </div>
           <button id="close-modal" class="close-btn">&times;</button>
         </div>
         <div class="modal-body">
           <div class="preview-frame-container">
             <iframe id="preview-frame"></iframe>
-          </div>
-          <div class="rating-section">
-            <p>请为这个设计打分：</p>
-            <div id="star-rating" class="star-rating">
-              <button class="star">★</button>
-              <button class="star">★</button>
-              <button class="star">★</button>
-              <button class="star">★</button>
-              <button class="star">★</button>
-            </div>
-            <p id="rating-label" class="rating-label"></p>
           </div>
         </div>
       </div>
