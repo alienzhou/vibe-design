@@ -15,6 +15,7 @@ export class ClaudeCliGenerator implements VariantGenerator {
     private readonly command = process.env.CLAUDE_CODE_COMMAND ?? 'claude',
     private readonly timeoutMs = readPositiveInteger(process.env.CLAUDE_CODE_TIMEOUT_MS, 1_800_000),
     private readonly parallelism = readPositiveInteger(process.env.CLAUDE_CODE_PARALLELISM, 3),
+    private readonly permissionMode = process.env.CLAUDE_CODE_PERMISSION_MODE ?? 'acceptEdits',
   ) {}
 
   async generate(request: GenerationRequest): Promise<GenerationResult> {
@@ -29,9 +30,10 @@ export class ClaudeCliGenerator implements VariantGenerator {
       `phase=${request.phase}`,
       `variantCount=${plans.length}`,
       `parallelism=${this.parallelism}`,
+      `permissionMode=${this.permissionMode}`,
       `timeoutMs=${this.timeoutMs}`,
     ].join('\n'));
-    console.info(`[Design Explorer] Claude Code parallel generation started. outputDir=${request.outputDir} variants=${plans.length} parallelism=${this.parallelism}`);
+    console.info(`[Design Explorer] Claude Code parallel generation started. outputDir=${request.outputDir} variants=${plans.length} parallelism=${this.parallelism} permissionMode=${this.permissionMode}`);
 
     const results = await runWithConcurrency(plans, this.parallelism, (plan) => this.generateSingleVariant(request, plan));
     return { output: results.join('\n') };
@@ -52,7 +54,9 @@ export class ClaudeCliGenerator implements VariantGenerator {
     return new Promise((resolve, reject) => {
       let child: ChildProcessByStdio<null, Readable, Readable>;
       try {
-        child = spawn(this.command, ['-p', plan.prompt], {
+        const args = ['--permission-mode', this.permissionMode, '-p', plan.prompt];
+        writeGenerationLog(request.outputDir, `Claude Code spawn args. variantId=${plan.variantId} args=--permission-mode ${this.permissionMode} -p <prompt>`);
+        child = spawn(this.command, args, {
           cwd: request.outputDir,
           stdio: ['ignore', 'pipe', 'pipe'],
         });

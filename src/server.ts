@@ -320,5 +320,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log(`Claude command: ${process.env.CLAUDE_CODE_COMMAND ?? 'claude'}`);
     console.log(`Claude timeout: ${process.env.CLAUDE_CODE_TIMEOUT_MS ?? '1800000'}ms`);
     console.log(`Claude parallelism: ${process.env.CLAUDE_CODE_PARALLELISM ?? '3'}`);
+    console.log(`Claude permission mode: ${process.env.CLAUDE_CODE_PERMISSION_MODE ?? 'acceptEdits'}`);
   });
 }
