@@ -9,6 +9,7 @@ import {
   explorationDir,
   listVariants,
   listExplorations,
+  MAX_EXPLORE_ROUNDS,
   resolveNextPhase,
   shouldEnterConverge,
   upsertScore,
@@ -16,7 +17,7 @@ import {
 } from './explorer.js';
 import { buildClaudeCliArgs, ClaudeCliGenerator, FallbackVariantGenerator, MockVariantGenerator, type VariantGenerator } from './generator.js';
 import { buildVariantPromptPlans } from './prompt-planner.js';
-import type { GenerationProgressEvent, GenerationRequest, GenerationResult, Score } from './types.js';
+import type { GenerationProgressEvent, GenerationRequest, GenerationResult } from './types.js';
 
 describe('explorer workflow', () => {
   it('keeps scores unique per variant', () => {
@@ -26,19 +27,26 @@ describe('explorer workflow', () => {
     expect(updated).toEqual([{ variantId: 'variant-1', rating: 5, timestamp: 200 }]);
   });
 
-  it('switches to converge when exploration has enough signal', () => {
-    const scores: Score[] = [
-      { variantId: 'variant-1', rating: 5, timestamp: 1 },
-      { variantId: 'variant-2', rating: 5, timestamp: 2 },
-      { variantId: 'variant-3', rating: 2, timestamp: 3 },
-    ];
-
-    expect(shouldEnterConverge(2, scores)).toBe(true);
-    expect(resolveNextPhase('explore', 2, scores)).toBe('converge');
+  it('keeps exploring even when several variants are highly rated, unless the user opts in', () => {
+    // 之前评分一旦集中在高分就会被静默切到对战，导致变体从 6 个掉到 2 个；
+    // 现在必须由用户显式触发收敛。
+    expect(shouldEnterConverge(2)).toBe(false);
+    expect(resolveNextPhase('explore', 2)).toBe('explore');
   });
 
-  it('forces converge after four completed rounds', () => {
-    expect(shouldEnterConverge(4, [{ variantId: 'variant-1', rating: 3, timestamp: 1 }])).toBe(true);
+  it('honors explicit user request to enter converge phase', () => {
+    expect(resolveNextPhase('explore', 1, { userRequestedConverge: true })).toBe('converge');
+  });
+
+  it(`forces converge after the ${MAX_EXPLORE_ROUNDS}-round explore cap is reached`, () => {
+    expect(shouldEnterConverge(MAX_EXPLORE_ROUNDS - 1)).toBe(false);
+    expect(shouldEnterConverge(MAX_EXPLORE_ROUNDS)).toBe(true);
+    expect(resolveNextPhase('explore', MAX_EXPLORE_ROUNDS)).toBe('converge');
+  });
+
+  it('keeps converge phase sticky once entered', () => {
+    expect(resolveNextPhase('converge', 1)).toBe('converge');
+    expect(resolveNextPhase('finalized', 1, { userRequestedConverge: true })).toBe('finalized');
   });
 
   it('builds broad exploration and narrow convergence prompts', () => {

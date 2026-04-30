@@ -161,7 +161,7 @@ export function createApp(options: CreateAppOptions = {}) {
     }
   });
 
-  app.post('/api/next-round', async (_req, res) => {
+  app.post('/api/next-round', async (req, res) => {
     try {
       if (!currentState) {
         throw new Error('Exploration has not started.');
@@ -170,6 +170,8 @@ export function createApp(options: CreateAppOptions = {}) {
       if (currentState.scores.length === 0) {
         throw new Error('At least one score is required before generating the next round.');
       }
+
+      const userRequestedConverge = Boolean((req.body as { enterConverge?: unknown }).enterConverge);
 
       const previousScores = [...currentState.scores];
       currentState.history = [
@@ -181,7 +183,7 @@ export function createApp(options: CreateAppOptions = {}) {
           scores: previousScores,
         },
       ];
-      currentState.phase = resolveNextPhase(currentState.phase, currentState.round, previousScores);
+      currentState.phase = resolveNextPhase(currentState.phase, currentState.round, { userRequestedConverge });
       currentState.round += 1;
       currentState.scores = [];
       currentState.variants = [];
