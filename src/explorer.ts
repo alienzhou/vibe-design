@@ -56,14 +56,21 @@ export function scoreVariance(scores: Score[]): number {
   return scores.reduce((sum, score) => sum + (score.rating - mean) ** 2, 0) / scores.length;
 }
 
-export function shouldEnterConverge(completedRound: number, scores: Score[]): boolean {
-  const lovedCount = scores.filter((score) => score.rating === 5).length;
-  const highRatedCount = scores.filter((score) => score.rating >= 4).length;
+// 探索阶段的硬上限：超过这个轮数后，强制进入对战阶段，避免无限发散。
+// 之前低到 4 轮，并叠加了基于评分的隐式触发（lovedCount/highRatedCount），
+// 导致用户在第 3 轮经常被静默切到只剩 2 个变体的对战阶段。
+// 现在仅保留这个保险阀，是否进入对战由用户显式触发。
+export const MAX_EXPLORE_ROUNDS = 6;
 
-  return completedRound >= 4 || lovedCount >= 2 || (highRatedCount >= 2 && scoreVariance(scores) <= 1);
+export function shouldEnterConverge(completedRound: number): boolean {
+  return completedRound >= MAX_EXPLORE_ROUNDS;
 }
 
-export function resolveNextPhase(currentPhase: Phase, completedRound: number, scores: Score[]): Phase {
+export function resolveNextPhase(
+  currentPhase: Phase,
+  completedRound: number,
+  options: { userRequestedConverge?: boolean } = {},
+): Phase {
   if (currentPhase === 'finalized') {
     return 'finalized';
   }
@@ -72,7 +79,11 @@ export function resolveNextPhase(currentPhase: Phase, completedRound: number, sc
     return 'converge';
   }
 
-  return shouldEnterConverge(completedRound, scores) ? 'converge' : 'explore';
+  if (options.userRequestedConverge) {
+    return 'converge';
+  }
+
+  return shouldEnterConverge(completedRound) ? 'converge' : 'explore';
 }
 
 export function variantCountForPhase(phase: Phase): number {

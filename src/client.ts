@@ -123,6 +123,7 @@ const skipClarificationBtn = query<HTMLButtonElement>('skip-clarification-btn');
 const cancelClarificationBtn = query<HTMLButtonElement>('cancel-clarification-btn');
 const backToStartBtn = query<HTMLButtonElement>('back-to-start-btn');
 const nextRoundBtn = query<HTMLButtonElement>('next-round-btn');
+const enterConvergeBtn = query<HTMLButtonElement>('enter-converge-btn');
 const finalizeBtn = query<HTMLButtonElement>('finalize-btn');
 const phaseBadge = query<HTMLElement>('phase-badge');
 const roundBadge = query<HTMLElement>('round-badge');
@@ -160,7 +161,14 @@ cancelClarificationBtn.addEventListener('click', () => {
 });
 
 nextRoundBtn.addEventListener('click', () => {
-  nextRound().catch(showError);
+  nextRound({ enterConverge: false }).catch(showError);
+});
+
+enterConvergeBtn.addEventListener('click', () => {
+  if (!confirm('进入对战阶段后只会生成 2 个变体用于精修，确认继续吗？')) {
+    return;
+  }
+  nextRound({ enterConverge: true }).catch(showError);
 });
 
 backToStartBtn.addEventListener('click', () => {
@@ -296,10 +304,10 @@ async function saveScore(rating: Rating): Promise<void> {
   });
 }
 
-async function nextRound(): Promise<void> {
+async function nextRound({ enterConverge }: { enterConverge: boolean }): Promise<void> {
   showLoading({
-    title: '正在生成下一轮...',
-    hint: 'AI 正在结合评分反馈继续探索',
+    title: enterConverge ? '正在生成对战变体...' : '正在生成下一轮...',
+    hint: enterConverge ? 'AI 正在精修 2 个最强候选' : 'AI 正在结合评分反馈继续探索',
     streamProgress: true,
   });
 
@@ -307,7 +315,7 @@ async function nextRound(): Promise<void> {
     const state = await requestJson<ExplorerState>('/api/next-round', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ enterConverge }),
     });
 
     applyServerState(state);
@@ -452,13 +460,26 @@ function updateVariantCardRating(variantId: string, rating: Rating): void {
 
 function updateActionButtons(): void {
   const scoredCount = Object.keys(currentState.scores).length;
+  const hasScores = scoredCount > 0;
+  const isFinalized = currentState.phase === 'finalized';
+  const isConverge = currentState.phase === 'converge';
 
-  nextRoundBtn.disabled = scoredCount === 0 || currentState.phase === 'finalized';
-  nextRoundBtn.textContent = scoredCount > 0
-    ? `下一轮探索 (${scoredCount}/${currentState.variants.length} 已评分) →`
-    : '请先为设计打分';
+  nextRoundBtn.disabled = !hasScores || isFinalized;
 
-  finalizeBtn.classList.toggle('hidden', currentState.phase !== 'converge' || scoredCount === 0);
+  if (!hasScores) {
+    nextRoundBtn.textContent = '请先为设计打分';
+  } else if (isConverge) {
+    nextRoundBtn.textContent = `下一轮对战 (${scoredCount}/${currentState.variants.length} 已评分) →`;
+  } else {
+    nextRoundBtn.textContent = `下一轮探索 (${scoredCount}/${currentState.variants.length} 已评分) →`;
+  }
+
+  // 仅在探索阶段显示「进入对战」按钮，让用户显式控制收敛时机
+  const showConvergeBtn = !isFinalized && !isConverge;
+  enterConvergeBtn.classList.toggle('hidden', !showConvergeBtn);
+  enterConvergeBtn.disabled = !hasScores;
+
+  finalizeBtn.classList.toggle('hidden', !isConverge || scoredCount === 0);
 }
 
 function updatePhaseDisplay(): void {

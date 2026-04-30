@@ -32,6 +32,7 @@
   var cancelClarificationBtn = query("cancel-clarification-btn");
   var backToStartBtn = query("back-to-start-btn");
   var nextRoundBtn = query("next-round-btn");
+  var enterConvergeBtn = query("enter-converge-btn");
   var finalizeBtn = query("finalize-btn");
   var phaseBadge = query("phase-badge");
   var roundBadge = query("round-badge");
@@ -63,7 +64,13 @@
     descriptionInput.focus();
   });
   nextRoundBtn.addEventListener("click", () => {
-    nextRound().catch(showError);
+    nextRound({ enterConverge: false }).catch(showError);
+  });
+  enterConvergeBtn.addEventListener("click", () => {
+    if (!confirm("\u8FDB\u5165\u5BF9\u6218\u9636\u6BB5\u540E\u53EA\u4F1A\u751F\u6210 2 \u4E2A\u53D8\u4F53\u7528\u4E8E\u7CBE\u4FEE\uFF0C\u786E\u8BA4\u7EE7\u7EED\u5417\uFF1F")) {
+      return;
+    }
+    nextRound({ enterConverge: true }).catch(showError);
   });
   backToStartBtn.addEventListener("click", () => {
     showStart();
@@ -176,17 +183,17 @@
       body: JSON.stringify({ variantId: currentModalVariant.id, rating })
     });
   }
-  async function nextRound() {
+  async function nextRound({ enterConverge }) {
     showLoading({
-      title: "\u6B63\u5728\u751F\u6210\u4E0B\u4E00\u8F6E...",
-      hint: "AI \u6B63\u5728\u7ED3\u5408\u8BC4\u5206\u53CD\u9988\u7EE7\u7EED\u63A2\u7D22",
+      title: enterConverge ? "\u6B63\u5728\u751F\u6210\u5BF9\u6218\u53D8\u4F53..." : "\u6B63\u5728\u751F\u6210\u4E0B\u4E00\u8F6E...",
+      hint: enterConverge ? "AI \u6B63\u5728\u7CBE\u4FEE 2 \u4E2A\u6700\u5F3A\u5019\u9009" : "AI \u6B63\u5728\u7ED3\u5408\u8BC4\u5206\u53CD\u9988\u7EE7\u7EED\u63A2\u7D22",
       streamProgress: true
     });
     try {
       const state = await requestJson("/api/next-round", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({})
+        body: JSON.stringify({ enterConverge })
       });
       applyServerState(state);
       closeVariantModal();
@@ -307,9 +314,21 @@
   }
   function updateActionButtons() {
     const scoredCount = Object.keys(currentState.scores).length;
-    nextRoundBtn.disabled = scoredCount === 0 || currentState.phase === "finalized";
-    nextRoundBtn.textContent = scoredCount > 0 ? `\u4E0B\u4E00\u8F6E\u63A2\u7D22 (${scoredCount}/${currentState.variants.length} \u5DF2\u8BC4\u5206) \u2192` : "\u8BF7\u5148\u4E3A\u8BBE\u8BA1\u6253\u5206";
-    finalizeBtn.classList.toggle("hidden", currentState.phase !== "converge" || scoredCount === 0);
+    const hasScores = scoredCount > 0;
+    const isFinalized = currentState.phase === "finalized";
+    const isConverge = currentState.phase === "converge";
+    nextRoundBtn.disabled = !hasScores || isFinalized;
+    if (!hasScores) {
+      nextRoundBtn.textContent = "\u8BF7\u5148\u4E3A\u8BBE\u8BA1\u6253\u5206";
+    } else if (isConverge) {
+      nextRoundBtn.textContent = `\u4E0B\u4E00\u8F6E\u5BF9\u6218 (${scoredCount}/${currentState.variants.length} \u5DF2\u8BC4\u5206) \u2192`;
+    } else {
+      nextRoundBtn.textContent = `\u4E0B\u4E00\u8F6E\u63A2\u7D22 (${scoredCount}/${currentState.variants.length} \u5DF2\u8BC4\u5206) \u2192`;
+    }
+    const showConvergeBtn = !isFinalized && !isConverge;
+    enterConvergeBtn.classList.toggle("hidden", !showConvergeBtn);
+    enterConvergeBtn.disabled = !hasScores;
+    finalizeBtn.classList.toggle("hidden", !isConverge || scoredCount === 0);
   }
   function updatePhaseDisplay() {
     phaseBadge.textContent = `Phase: ${phaseLabel(currentState.phase)}`;
