@@ -79,6 +79,8 @@ describe('explorer workflow', () => {
     expect(args).toEqual([
       '--permission-mode',
       'acceptEdits',
+      '--output-format',
+      'stream-json',
       '--allowedTools',
       'Write',
       'Bash(mkdir *)',

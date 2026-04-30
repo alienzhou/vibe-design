@@ -345,7 +345,7 @@ export function createGenerator(): VariantGenerator {
 }
 
 export function buildClaudeCliArgs(prompt: string, permissionMode: string, allowedTools: string[]): string[] {
-  const args = ['--permission-mode', permissionMode];
+  const args = ['--permission-mode', permissionMode, '--output-format', 'stream-json'];
   if (allowedTools.length > 0) {
     args.push('--allowedTools', ...allowedTools);
   }
